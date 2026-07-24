@@ -10,7 +10,7 @@ pub fn run_jeofetch() {
         .stderr(Stdio::inherit())
         .status();
     if let Err(e) = status {
-        eprintln!("jsh: jeofetch: {}", e);
+        eprintln!("jesh: jeofetch: {}", e);
     }
 }
 
@@ -20,14 +20,12 @@ pub fn is_builtin(cmd: &str) -> bool {
         "cd" | "exit"
             | "exec"
             | "time"
-            | "jeofetch"
             | "help"
             | "version"
-            | "jsh-version"
-            | "jsh-path"
-            | "jsh-info"
-            | "which-jsh"
-            | "jsh-which"
+            | "jesh-version"
+            | "jesh-path"
+            | "jesh-which"
+            | "jesh-which"
             | "export"
             | "unset"
             | "set"
@@ -70,7 +68,7 @@ pub fn is_executable(cmd: &str) -> bool {
 fn print_help() {
     println!(
         "\
-jsh — shell interativo
+bjesh — shell interativo
 
 Builtins:
   cd [dir]           Muda de diretório (sem args: vai para $HOME)
@@ -83,8 +81,8 @@ Builtins:
   source arquivo | .  Executa um script no shell atual
   true / false / :    Comandos no-op de status 0/1
   exec [cmd] [args]   Substitui o processo do shell pelo comando especificado
-  jsh-path / jsh-info Mostra o caminho exato do binário jsh em execução
-  exit                Sai do jsh
+  jesh-path / jesh-info Mostra o caminho exato do binário jesh em execução
+  exit                Sai do jesh
 
 Sintaxe suportada: pipes (|), redirecionamentos (>, >>, <, <<, <<<, 2>, &>),
 listas de comandos (;, &&, ||), aspas simples/duplas, escapes (\\),
@@ -188,33 +186,33 @@ pub fn handle_builtin(args: &[String], state: &mut ShellState) -> Option<i32> {
             print_help();
             Some(0)
         }
-        "jsh-path" | "which-jsh" | "jsh-which" => {
+        "jesh-path" | "jesh-which" | "jesh-which" => {
             if let Ok(exe) = env::current_exe() {
                 println!("{}", exe.display());
             } else {
-                println!("jsh");
+                println!("bjesh");
             }
             Some(0)
         }
-        "jsh-info" => {
+        "jesh-info" => {
             let exe_str = env::current_exe()
                 .map(|p| p.display().to_string())
-                .unwrap_or_else(|_| "jsh".to_string());
-            println!("jsh v{} ({})", env!("CARGO_PKG_VERSION"), exe_str);
+                .unwrap_or_else(|_| "bjesh".to_string());
+            println!("jesh v{} ({})", env!("CARGO_PKG_VERSION"), exe_str);
             Some(0)
         }
-        "jsh-version" => {
+        "jesh-version" => {
             let exe_str = env::current_exe()
                 .map(|p| p.display().to_string())
-                .unwrap_or_else(|_| "jsh".to_string());
-            println!("jsh v{} ({})", env!("CARGO_PKG_VERSION"), exe_str);
+                .unwrap_or_else(|_| "bjesh".to_string());
+            println!("jesh v{} ({})", env!("CARGO_PKG_VERSION"), exe_str);
             Some(0)
         }
         "version" => {
             let exe_str = env::current_exe()
                 .map(|p| p.display().to_string())
-                .unwrap_or_else(|_| "jsh".to_string());
-            println!("jsh {} ({})", env!("CARGO_PKG_VERSION"), exe_str);
+                .unwrap_or_else(|_| "bjesh".to_string());
+            println!("bjesh {} ({})", env!("CARGO_PKG_VERSION"), exe_str);
             Some(0)
         }
         "true" | ":" => Some(0),
@@ -365,7 +363,7 @@ pub fn handle_builtin(args: &[String], state: &mut ShellState) -> Option<i32> {
                 let mut cmd = std::process::Command::new(&args[1]);
                 cmd.args(&args[2..]);
                 let err = cmd.exec();
-                eprintln!("jsh: exec: {}: {}", args[1], err);
+                eprintln!("jesh: exec: {}: {}", args[1], err);
                 let exit_code = match err.kind() {
                     std::io::ErrorKind::NotFound => 127,
                     std::io::ErrorKind::PermissionDenied => 126,

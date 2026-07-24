@@ -1,6 +1,6 @@
 # Análise de Gaps: O que falta no Checklist do JSH?
 
-Esta análise identifica recursos, comportamentos e padrões ausentes no checklist original do **JSH**, organizados por categoria. O objetivo é aproximar o `jsh` de shells maduros como Bash, Zsh e Fish, além de incorporar diferenciais modernos (estilo Nushell e integrações contemporâneas).
+Esta análise identifica recursos, comportamentos e padrões ausentes no checklist original do **JSH**, organizados por categoria. O objetivo é aproximar o `jesh` de shells maduros como Bash, Zsh e Fish, além de incorporar diferenciais modernos (estilo Nushell e integrações contemporâneas).
 
 ---
 

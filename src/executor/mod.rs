@@ -132,7 +132,7 @@ fn execute_expanded(state: &mut ShellState, expanded: ExpandedPipeline, backgrou
         }
 
         let err = process.exec();
-        eprintln!("jsh: exec: {}: {}", target_cmd, err);
+        eprintln!("jesh: exec: {}: {}", target_cmd, err);
         let exit_code = match err.kind() {
             std::io::ErrorKind::NotFound => 127,
             std::io::ErrorKind::PermissionDenied => 126,
@@ -287,7 +287,7 @@ fn apply_current_redirects(redirects: &[crate::parser::lexer::Redirect], heredoc
                             libc::dup2(file.as_raw_fd(), 0);
                         }
                     } else {
-                        eprintln!("jsh: {}: Arquivo não encontrado", path);
+                        eprintln!("jesh: {}: Arquivo não encontrado", path);
                         std::process::exit(1);
                     }
                 } else {
@@ -311,7 +311,7 @@ fn apply_current_redirects(redirects: &[crate::parser::lexer::Redirect], heredoc
                             }
                         }
                     } else {
-                        eprintln!("jsh: {}: Erro ao abrir arquivo", path);
+                        eprintln!("jesh: {}: Erro ao abrir arquivo", path);
                         std::process::exit(1);
                     }
                 }

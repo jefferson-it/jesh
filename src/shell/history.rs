@@ -245,8 +245,8 @@ impl HistoryManager {
     pub fn new() -> Self {
         let home = std::env::var("HOME").ok().map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("."));
-        let history_file_path = home.join(".jsh-history");
-        let pins_file_path = home.join(".jsh-pins");
+        let history_file_path = home.join(".bjesh-history");
+        let pins_file_path = home.join(".bjesh-pins");
 
         let state = Arc::new(Mutex::new(HistoryState {
             config: HistoryConfig::default(),
@@ -310,7 +310,7 @@ impl HistoryManager {
                     entry.count += 1;
 
                     if let Err(e) = append_entry_to_file(&path, entry) {
-                        eprintln!("jsh: erro ao salvar histórico: {}", e);
+                        eprintln!("jesh: erro ao salvar histórico: {}", e);
                     }
                     return;
                 }
@@ -321,7 +321,7 @@ impl HistoryManager {
 
         if let Some(&idx) = state.cmd_to_idx.get(trimmed) {
             if let Err(e) = append_entry_to_file(&path, &state.entries[idx]) {
-                eprintln!("jsh: erro ao salvar histórico: {}", e);
+                eprintln!("jesh: erro ao salvar histórico: {}", e);
             }
         }
 
@@ -566,7 +566,7 @@ fn append_entry_to_file(path: &Path, entry: &HistoryEntry) -> io::Result<()> {
 fn load_config() -> HistoryConfig {
     let home = std::env::var("HOME").ok().map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));
-    let config_path = home.join(".config/jsh/config.toml");
+    let config_path = home.join(".config/bjesh/config.toml");
     if config_path.exists() {
         if let Ok(content) = fs::read_to_string(&config_path) {
             #[derive(Deserialize)]

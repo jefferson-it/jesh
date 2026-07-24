@@ -1,4 +1,4 @@
-//! Shared utility helpers for `jsh`.
+//! Shared utility helpers for `bjesh`.
 //!
 //! Cross-module helpers (string/path expansion) used by several subsystems.
 

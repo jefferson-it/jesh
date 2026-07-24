@@ -3,8 +3,8 @@ use std::fs;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::PathBuf;
 
-const SYSTEM_DIR: &str = "/opt/jeffutils/jsh/comp";
-const USER_DIR: &str = ".local/.jsh/completations";
+const SYSTEM_DIR: &str = "/opt/jeffutils/bjesh/comp";
+const USER_DIR: &str = ".local/.bjesh/completations";
 
 pub struct CompletionDb {
     system_dir: PathBuf,
@@ -61,7 +61,7 @@ impl CompletionDb {
         let Ok(entries) = fs::read_dir(dir) else { return };
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_dir() || path.extension().map(|e| e != "bash" && e != "zsh" && e != "jsh").unwrap_or(false) {
+            if path.is_dir() || path.extension().map(|e| e != "bash" && e != "zsh" && e != "bjesh").unwrap_or(false) {
                 continue;
             }
             let cmd_name = path.file_stem()

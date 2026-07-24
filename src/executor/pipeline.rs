@@ -24,9 +24,9 @@ fn open_output_file(path: &str, append: bool) -> File {
     match opts.open(&path) {
         Ok(f) => f,
         Err(e) => {
-            eprintln!("jsh: {}: {}", path, e);
+            eprintln!("jesh: {}: {}", path, e);
             File::open("/dev/null").unwrap_or_else(|_| {
-                eprintln!("jsh: erro crítico: não foi possível abrir /dev/null");
+                eprintln!("jesh: erro crítico: não foi possível abrir /dev/null");
                 std::process::exit(1);
             })
         }
@@ -39,9 +39,9 @@ fn open_input_file(path: &str) -> File {
     match OpenOptions::new().read(true).open(&path) {
         Ok(f) => f,
         Err(e) => {
-            eprintln!("jsh: {}: {}", path, e);
+            eprintln!("jesh: {}: {}", path, e);
             File::open("/dev/null").unwrap_or_else(|_| {
-                eprintln!("jsh: erro crítico: não foi possível abrir /dev/null");
+                eprintln!("jesh: erro crítico: não foi possível abrir /dev/null");
                 std::process::exit(1);
             })
         }
@@ -133,7 +133,7 @@ fn spawn_one(
                     )
                 }
                 Err(e) => {
-                    eprintln!("jsh: erro ao criar pipe: {}", e);
+                    eprintln!("jesh: erro ao criar pipe: {}", e);
                     (Stdio::inherit(), None)
                 }
             }
@@ -235,7 +235,7 @@ pub fn execute_with(pipe: ExpandedPipeline, state: &crate::shell::ShellState) ->
             }
             Err(e) => {
                 if !quiet {
-                    eprintln!("jsh: {}: {}", cmd.program, e);
+                    eprintln!("jesh: {}: {}", cmd.program, e);
                     if e.kind() == std::io::ErrorKind::NotFound {
                         if let Some(suggestion) = crate::utils::suggest_command(&cmd.program, state) {
                             eprintln!("Você quis dizer '{}'?", suggestion);
@@ -318,7 +318,7 @@ pub fn spawn_detached(pipe: ExpandedPipeline) -> Option<u32> {
                 last_pid = Some(pid);
             }
             Err(e) => {
-                eprintln!("jsh: {}: {}", cmd.program, e);
+                eprintln!("jesh: {}: {}", cmd.program, e);
                 for mut child in children {
                     let _ = child.kill();
                     let _ = child.wait();
@@ -350,7 +350,7 @@ pub fn execute_capture(pipe: ExpandedPipeline) -> Vec<u8> {
         match process.spawn() {
             Ok(child) => children.push(child),
             Err(e) => {
-                eprintln!("jsh: {}: {}", cmd.program, e);
+                eprintln!("jesh: {}: {}", cmd.program, e);
                 return Vec::new();
             }
         }

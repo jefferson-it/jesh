@@ -24,7 +24,7 @@ pub struct ShellState {
     pub shell_vars: Arc<Mutex<HashMap<String, String>>>,
     /// Names of shell vars that have been `export`ed to the process env.
     pub exported: HashSet<String>,
-    /// Name jsh was invoked as / script path, used for `$0`.
+    /// Name jesh was invoked as / script path, used for `$0`.
     pub arg0: String,
     /// When true, "command not found" errors are swallowed instead of
     /// printed. Used while loading `.jshrc`, since it may contain bash-only
@@ -33,8 +33,8 @@ pub struct ShellState {
     /// every startup would be noisy for configs migrated from bash/zsh.
     pub quiet_errors: bool,
     /// Paths passed to `source`/`.` that look like real bash scripts
-    /// (define functions, use `[[`, etc.) rather than simple jsh-style
-    /// config. jsh can't interpret bash functions itself, so commands that
+    /// (define functions, use `[[`, etc.) rather than simple jesh-style
+    /// config. jesh can't interpret bash functions itself, so commands that
     /// turn out to be unknown are retried through `bash -ic "source <file>;
     /// <cmd> <args>"` for each of these files — this is how things like
     /// `nvm use 18` keep working after `.jshrc` sources nvm.sh.
@@ -49,7 +49,7 @@ pub struct ShellState {
     positional_stack: Vec<Vec<String>>,
     /// Last-seen modification time of `.jshrc`, used to detect edits for
     /// hot-reloading. `None` until the file is first loaded.
-    jshrc_mtime: Option<SystemTime>,
+    pub jeshrc_mtime: Option<SystemTime>,
     /// Cached OS logo (emoji) for the prompt, populated on first access.
     cached_os_logo: Option<String>,
     /// Cached commands known to NOT exist in bash (neg cache for try_bash_fallback).
@@ -79,7 +79,7 @@ impl ShellState {
             }
         }
 
-        // Override SHELL env var to point to our jsh
+        // Override SHELL env var to point to our jesh
         if let Ok(exe) = env::current_exe() {
             unsafe {
                 env::set_var("SHELL", exe);
@@ -99,7 +99,21 @@ impl ShellState {
         let history_mgr = Arc::new(history::HistoryManager::new());
         history_mgr.load_history();
 
-        let completions = Arc::new(CompletionDb::new());
+        let jeshrc_path = home.join(".jeshrc");
+        let mut bash_sourced_files: Vec<PathBuf> = Vec::new();
+        let mut shell_vars: Arc<Mutex<HashMap<String, String>>> = Arc::new(Mutex::new(HashMap::new()));
+        let mut exported: HashSet<String> = HashSet::new();
+        let arg0 = String::new();
+        let quiet_errors = false;
+        let mut functions: Arc<Mutex<HashMap<String, String>>> = Arc::new(Mutex::new(HashMap::new()));
+        let mut positional_stack: Vec<Vec<String>> = Vec::new();
+        let mut old_pwd: Option<PathBuf> = None;
+        let mut cached_os_logo: Option<String> = None;
+        let mut bash_cmd_neg_cache: HashSet<String> = HashSet::new();
+        let mut is_interactive = false;
+        let mut completions = Arc::new(CompletionDb::new());
+        let mut dir_stack: Vec<PathBuf> = Vec::new();
+        let jeshrc_mtime: Option<SystemTime> = None;
 
         Self {
             last_exit_status: 0,
@@ -109,12 +123,12 @@ impl ShellState {
             old_pwd: None,
             shell_vars: Arc::new(Mutex::new(HashMap::new())),
             exported: HashSet::new(),
-            arg0: "jsh".to_string(),
+            arg0: "jesh".to_string(),
             quiet_errors: false,
             bash_sourced_files: Vec::new(),
             functions: Arc::new(Mutex::new(HashMap::new())),
             positional_stack: Vec::new(),
-            jshrc_mtime: None,
+            jeshrc_mtime: None,
             cached_os_logo: None,
             bash_cmd_neg_cache: HashSet::new(),
             is_interactive: false,
@@ -125,14 +139,14 @@ impl ShellState {
     }
 
     pub fn load_jshrc(&mut self) {
-        let jshrc_path = self.home_dir.join(".jshrc");
-        if !jshrc_path.exists() {
+        let jeshrc_path = self.home_dir.join(".jeshrc");
+        if !jeshrc_path.exists() {
             let default_jshrc = "\
-# jsh configuration file
+# jesh configuration file
 INIT_INFO=true
 
 # When true, editing this file re-loads it automatically before each
-# prompt — no need to `source .jshrc` or restart the shell.
+# prompt — no need to `source.jeshrc` or restart the shell.
 HOT_RELOAD=true
 
 # When true, shows elapsed time for commands that take >= 2s.
@@ -153,23 +167,23 @@ export EDITOR=texit
 # Extend the inherited PATH instead of replacing it:
 export PATH=$PATH:/usr/local/bin
 ";
-            let _ = fs::write(&jshrc_path, default_jshrc);
+            let _ = fs::write(&jeshrc_path, default_jshrc);
         }
 
-        self.jshrc_mtime = fs::metadata(&jshrc_path)
+        self.jeshrc_mtime = fs::metadata(&jeshrc_path)
             .and_then(|m| m.modified())
             .ok();
 
-        if let Ok(content) = fs::read_to_string(&jshrc_path) {
+        if let Ok(content) = fs::read_to_string(&jeshrc_path) {
             self.quiet_errors = true;
             self.run_script_text(&content);
             self.quiet_errors = false;
         }
     }
 
-    /// If hot-reload is enabled (`HOT_RELOAD=true` in `.jshrc`) and the file
+    /// If hot-reload is enabled (`HOT_RELOAD=true` in `.jeshrc`) and the file
     /// has been modified since it was last loaded, re-run it so edits take
-    /// effect without `source .jshrc` or restarting the shell. Called before
+    /// effect without `source.jeshrc` or restarting the shell. Called before
     /// each interactive prompt. The `HOT_RELOAD` flag is read from the
     /// *currently loaded* config, so setting it to false (or removing it)
     /// and reloading once disables further auto-reloading.
@@ -177,17 +191,17 @@ export PATH=$PATH:/usr/local/bin
         if self.get_var("HOT_RELOAD") != "true" {
             return;
         }
-        let jshrc_path = self.home_dir.join(".jshrc");
-        let Some(mtime) = fs::metadata(&jshrc_path).and_then(|m| m.modified()).ok() else {
+        let jeshrc_path = self.home_dir.join(".jeshrc");
+        let Some(mtime) = fs::metadata(&jeshrc_path).and_then(|m| m.modified()).ok() else {
             return;
         };
-        if self.jshrc_mtime == Some(mtime) {
+        if self.jeshrc_mtime == Some(mtime) {
             return;
         }
         self.load_jshrc();
     }
 
-    /// Heuristic: does `content` use bash syntax jsh genuinely can't parse
+    /// Heuristic: does `content` use bash syntax jesh genuinely can't parse
     /// (`[[ ]]`, `local`, `case`, etc — simple one-line function defs are
     /// now natively supported, see `run_script_text`)? If so, `source`/`.`
     /// should remember the file so unknown commands can be retried through
@@ -200,7 +214,7 @@ export PATH=$PATH:/usr/local/bin
 
     /// Retries `program args...` through `bash -ic`, sourcing every bash
     /// script previously loaded via `source`/`.`, so functions defined
-    /// there (e.g. `nvm`) remain callable from jsh. Returns `None` if there
+    /// there (e.g. `nvm`) remain callable from jesh. Returns `None` if there
     /// are no bash-sourced files or bash isn't available.
     /// Uses a negative cache to avoid repeated spawns for commands known to not exist.
     pub fn try_bash_fallback(&mut self, program: &str, args: &[String]) -> Option<i32> {
@@ -569,7 +583,7 @@ export PATH=$PATH:/usr/local/bin
                         Ok(val) => out.push_str(&val.to_string()),
                         Err(e) => {
                             if !self.quiet_errors {
-                                eprintln!("jsh: $(( {} )): {}", expr.trim(), e);
+                                eprintln!("jesh: $(( {} )): {}", expr.trim(), e);
                             }
                         }
                     }

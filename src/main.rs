@@ -521,7 +521,7 @@ fn run_interactive(mut state: ShellState) {
                 println!("^C");
             }
             Err(ReadlineError::Eof) => {
-                println!("Saindo do jsh...");
+                println!("Saindo do jesh...");
                 break;
             }
             Err(err) => {
@@ -538,7 +538,7 @@ fn run_interactive(mut state: ShellState) {
 fn run_script<R: BufRead>(mut state: ShellState, mut reader: R) {
     let mut content = String::new();
     if let Err(e) = reader.read_to_string(&mut content) {
-        eprintln!("jsh: erro ao ler script: {}", e);
+        eprintln!("jesh: erro ao ler script: {}", e);
         std::process::exit(1);
     }
     state.run_script_text(&content);
@@ -546,7 +546,7 @@ fn run_script<R: BufRead>(mut state: ShellState, mut reader: R) {
 }
 
 fn main() {
-if std::env::args().skip(1).any(|a| a == "--version" || a == "-v") { jutils_core::print_version("jsh", env!("CARGO_PKG_VERSION")); std::process::exit(0); }
+if std::env::args().skip(1).any(|a| a == "--version" || a == "-v") { jutils_core::print_version("jesh", env!("CARGO_PKG_VERSION")); std::process::exit(0); }
     let mut state = ShellState::new();
 
     // Sync $PWD with actual CWD before loading .jshrc or running any commands.
@@ -570,7 +570,7 @@ if std::env::args().skip(1).any(|a| a == "--version" || a == "-v") { jutils_core
                 }
                 break;
             } else {
-                eprintln!("jsh: -c: option requires an argument");
+                eprintln!("jesh: -c: option requires an argument");
                 std::process::exit(2);
             }
         } else if arg == "-l" || arg == "--login" {
@@ -600,7 +600,7 @@ if std::env::args().skip(1).any(|a| a == "--version" || a == "-v") { jutils_core
         match std::fs::File::open(&path) {
             Ok(f) => run_script(state, std::io::BufReader::new(f)),
             Err(e) => {
-                eprintln!("jsh: {}: {}", path, e);
+                eprintln!("jesh: {}: {}", path, e);
                 std::process::exit(1);
             }
         }
@@ -616,7 +616,7 @@ if std::env::args().skip(1).any(|a| a == "--version" || a == "-v") { jutils_core
     }
 
     // Run jeofetch on init, but only in an interactive terminal session.
-    // Skip it for non-tty invocations like `jsh -c "..."`, piped stdin
+    // Skip it for non-tty invocations like `jesh -c "..."`, piped stdin
     // (e.g. `!pwd` inside Claude), or when stdout is redirected — there
     // jeofetch would just be noise in captured output.
     if state.init_info && std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
