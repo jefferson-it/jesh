@@ -10,6 +10,13 @@ pub struct CompletionDb {
     system_dir: PathBuf,
     user_dir: PathBuf,
     entries: HashMap<String, Vec<String>>,
+    /// Programmable completers: maps command name to shell function name
+    /// that should be called to generate completions.
+    /// The function receives `$1`=current word, `$2`=previous word,
+    /// `$3`=all words so far, and should output completion lines to stdout.
+    pub completers: HashMap<String, String>,
+    /// Custom word lists registered via `complete -W "..." cmd`
+    pub word_lists: HashMap<String, Vec<String>>,
 }
 
 impl CompletionDb {
@@ -22,6 +29,8 @@ impl CompletionDb {
             system_dir,
             user_dir: user_dir.clone(),
             entries: HashMap::new(),
+            completers: HashMap::new(),
+            word_lists: HashMap::new(),
         };
 
         if !user_dir.exists() {
@@ -55,6 +64,52 @@ impl CompletionDb {
 
     pub fn has(&self, cmd: &str) -> bool {
         self.entries.contains_key(cmd)
+    }
+
+    /// Register a shell function as completer for a command.
+    /// Equivalent to bash's `complete -F _func cmd`.
+    pub fn register_completer(&mut self, cmd: &str, func_name: &str) {
+        self.completers.insert(cmd.to_string(), func_name.to_string());
+    }
+
+    /// Register a word list for a command.
+    /// Equivalent to bash's `complete -W "word1 word2" cmd`.
+    pub fn register_word_list(&mut self, cmd: &str, words: &[String]) {
+        self.word_lists.insert(cmd.to_string(), words.to_vec());
+    }
+
+    /// Get the function completer for a command, if registered.
+    pub fn get_completer(&self, cmd: &str) -> Option<&str> {
+        self.completers.get(cmd).map(|s| s.as_str())
+    }
+
+    /// Get the word list for a command, if registered.
+    pub fn get_word_list(&self, cmd: &str) -> Vec<String> {
+        self.word_lists.get(cmd).cloned().unwrap_or_default()
+    }
+
+    /// Run a function completer by calling the shell function through state.
+    /// Returns the list of completion words.
+    pub fn run_completer(&self, cmd: &str, state: &mut crate::shell::ShellState,
+                         current_word: &str, prev_word: &str, words: &str) -> Vec<String> {
+        let Some(func_name) = self.get_completer(cmd) else {
+            return Vec::new();
+        };
+        let args = vec![
+            current_word.to_string(),
+            prev_word.to_string(),
+            words.to_string(),
+        ];
+        let exit = state.call_function(func_name, &args);
+        if exit != 0 {
+            return Vec::new();
+        }
+        // The function should have set a variable with completions
+        let result = state.get_var("COMP_REPLY");
+        if result.is_empty() {
+            return Vec::new();
+        }
+        result.split_whitespace().map(|s| s.to_string()).collect()
     }
 
     fn load_dir(&mut self, dir: &PathBuf, overwrite: bool) {

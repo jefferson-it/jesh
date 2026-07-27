@@ -5,7 +5,7 @@ mod parser;
 mod shell;
 mod utils;
 
-use std::io::{BufRead, IsTerminal};
+use std::io::{BufRead, IsTerminal, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
@@ -20,8 +20,6 @@ use crate::parser::lexer::RedirectTarget;
 use crate::shell::ShellState;
 
 static SIGINT_FLAG: AtomicBool = AtomicBool::new(false);
-
-
 
 extern "C" fn sigint_handler(_sig: i32) {
     SIGINT_FLAG.store(true, Ordering::SeqCst);
@@ -67,6 +65,43 @@ fn expand_history_refs(line: &str, history_mgr: &crate::shell::history::HistoryM
                     }
                 } else {
                     out.push_str("!$");
+                }
+            }
+            Some('*') => {
+                chars.next();
+                if let Some(entry) = entries.last() {
+                    let args: Vec<&str> = entry.command.split_whitespace().collect();
+                    if args.len() > 1 {
+                        out.push_str(&args[1..].join(" "));
+                    }
+                }
+            }
+            Some('-') => {
+                chars.next();
+                let mut num = String::new();
+                while let Some(&d) = chars.peek() {
+                    if d.is_ascii_digit() {
+                        num.push(d);
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                if num.is_empty() {
+                    out.push_str("!-");
+                } else if let Ok(n) = num.parse::<usize>() {
+                    if n == 0 || n > entries.len() {
+                        out.push('!');
+                        out.push('-');
+                        out.push_str(&num);
+                    } else {
+                        let idx = entries.len() - n;
+                        out.push_str(&entries[idx].command);
+                    }
+                } else {
+                    out.push('!');
+                    out.push('-');
+                    out.push_str(&num);
                 }
             }
             Some('?') => {
@@ -241,14 +276,18 @@ fn run_interactive(mut state: ShellState) {
 
     crate::utils::save_shell_termios();
 
-    let tab_mode = {
+        let tab_mode = {
         let vars = state.shell_vars.lock().unwrap();
         match vars.get("JSH_TAB_MODE").map(|s| s.as_str()) {
             Some("circular") | Some("Circular") | Some("CIRCULAR") => crate::completion::TabMode::Circular,
+            Some("hybrid") | Some("Hybrid") | Some("HYBRID") => crate::completion::TabMode::Hybrid,
             _ => crate::completion::TabMode::Interactive,
         }
     };
 
+    // Hybrid uses CompletionType::List (the default) so rustyline shows its
+    // own list alongside our enhanced interactive menu.  Only Circular mode
+    // switches to CompletionType::Circular for inline cycling.
     let completion_type = if tab_mode == crate::completion::TabMode::Circular {
         rustyline::CompletionType::Circular
     } else {
@@ -256,9 +295,12 @@ fn run_interactive(mut state: ShellState) {
     };
 
     let config = Config::builder()
-        .bracketed_paste(false)
+        .bracketed_paste(true)
         .completion_type(completion_type)
         .build();
+
+    // Enable shell integration for modern terminals
+    crate::utils::emit_osc7();
 
     let mut rl = Editor::<JshHelper, DefaultHistory>::with_config(config)
         .expect("Erro ao inicializar editor de linha");
@@ -417,6 +459,8 @@ fn run_interactive(mut state: ShellState) {
     rl.set_helper(Some(helper));
 
     loop {
+        state.check_bg_jobs();
+
         let prompt_clean = state.render_prompt_clean();
         let prompt_colored = state.render_prompt();
         crate::completion::CURRENT_COLORED_PROMPT.with(|cell| {
@@ -435,9 +479,21 @@ fn run_interactive(mut state: ShellState) {
                     continue;
                 }
 
+                let line = if crate::utils::pasted_text_contains_metacharacters(line) {
+                    let escaped = crate::utils::smart_paste_escape(line);
+                    if escaped != line {
+                        eprintln!("\x1b[33mjesh: smart paste: wrapped in quotes\x1b[0m");
+                        escaped
+                    } else {
+                        line.to_string()
+                    }
+                } else {
+                    line.to_string()
+                };
+
                 state.maybe_hot_reload();
 
-                let expanded_line = expand_history_refs(line, &state.history_mgr);
+                let expanded_line = expand_history_refs(&line, &state.history_mgr);
 
                 let show_timing = state.get_var("SHOW_TIMING") != "false";
                 let start_time = std::time::Instant::now();
@@ -513,7 +569,7 @@ fn run_interactive(mut state: ShellState) {
                 if show_timing {
                     let elapsed = start_time.elapsed();
                     if elapsed.as_secs_f64() >= 2.0 {
-                        eprintln!("\x1B[38;5;240m(⏳ demorou {:.1}s)\x1B[0m", elapsed.as_secs_f64());
+                        eprintln!("\u{1b}[38;5;240m(\u{23f3} demorou {:.1}s)\u{1b}[0m", elapsed.as_secs_f64());
                     }
                 }
             }
@@ -545,8 +601,20 @@ fn run_script<R: BufRead>(mut state: ShellState, mut reader: R) {
     std::process::exit(state.last_exit_status);
 }
 
+fn print_version() {
+    println!("jesh (jeffutils) {}", env!("CARGO_PKG_VERSION"));
+    println!("Copyright (C) 2026 Jefferson Silva de Souza Rios.");
+    println!("Contato: jeff.silvadsouza@gmail.com");
+    println!("Licenca GPLv3+: GNU GPL versao 3 ou posterior <https://gnu.org/licenses/gpl.html>");
+    println!("Este e um software livre: voce e livre para altera-lo e redistribui-lo.");
+    println!("NAO HA QUALQUER GARANTIA, na maxima extensao permitida em lei.");
+}
+
 fn main() {
-if std::env::args().skip(1).any(|a| a == "--version" || a == "-v") { println!("jesh v{}", env!("CARGO_PKG_VERSION")); std::process::exit(0); }
+    if std::env::args().skip(1).any(|a| a == "--version" || a == "-v") {
+        print_version();
+        std::process::exit(0);
+    }
     let mut state = ShellState::new();
 
     // Sync $PWD with actual CWD before loading .jshrc or running any commands.

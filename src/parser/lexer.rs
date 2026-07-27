@@ -8,20 +8,37 @@ pub enum RedirectTarget {
     Heredoc(String, bool),
     /// Here-string: the string is the literal content fed to stdin (`<<<`).
     HereString(String),
+    /// Process substitution: (command text, true=input `<(`, false=output `>(`).
+    ProcessSubst(String, bool),
+    /// Close file descriptor.
+    Close(i32),
+    /// Dynamic file descriptor: `{VARNAME}` in `exec {FD}>file`.
+    /// The shell allocates the next available fd >= 10 and sets VARNAME to its number.
+    Dynamic(String),
+    /// Redirect target that cannot be classified at lex time because it has
+    /// variable references (e.g. `>&$FD`). Fully expanded in `expand_pipeline`.
+    LazyWord(Vec<WordSegment>),
 }
 
 #[derive(Debug, Clone)]
 pub struct Redirect {
-    /// File descriptor: 0 = stdin, 1 = stdout, 2 = stderr, -1 = both (from `&>`).
+    /// File descriptor: 0 = stdin, 1 = stdout, 2 = stderr, -1 = both (from `&>`),
+    /// -2 = dynamic fd allocation (from `{VARNAME}>file`).
     pub fd: i32,
     pub append: bool,
     pub target: RedirectTarget,
+    /// Variable name for dynamic fd allocation, e.g. "FD" in `exec {FD}>file`.
+    /// None for normal redirects.
+    pub dyn_var: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 pub enum Token {
     Word(Word),
+    /// `|`
     Pipe,
+    /// `!` (negation operator)
+    Not,
     Redirect(Redirect),
     /// `;`
     Semi,
@@ -71,6 +88,27 @@ impl<'a> Lexer<'a> {
                         self.tokens.push(Token::Pipe);
                     }
                 }
+                '!' => {
+                    // Peek ahead to determine context
+                    let mut lookahead = self.chars.clone();
+                    lookahead.next();
+                    if lookahead.peek() == Some(&'(') {
+                        // Extglob `!(...)`
+                        self.chars.next(); // consume '!'
+                        let word = self.read_word();
+                        self.tokens.push(Token::Word(word));
+                        continue;
+                    }
+                    // Check if followed by whitespace, newline, comment, or end — negation operator
+                    if matches!(lookahead.peek(), None | Some(' ') | Some('\t') | Some('\n') | Some('#')) {
+                        self.chars.next(); // consume '!'
+                        self.tokens.push(Token::Not);
+                        continue;
+                    }
+                    // Part of a word (e.g. `!important`), read normally
+                    let word = self.read_word();
+                    self.tokens.push(Token::Word(word));
+                }
                 '&' => {
                     self.chars.next();
                     if self.chars.peek() == Some(&'&') {
@@ -88,6 +126,7 @@ impl<'a> Lexer<'a> {
                             fd: -1,
                             append,
                             target: RedirectTarget::File(flatten_literal(&target)),
+                            dyn_var: None,
                         }));
                     } else {
                         self.tokens.push(Token::Background);
@@ -103,6 +142,17 @@ impl<'a> Lexer<'a> {
                 }
                 '<' => {
                     self.chars.next();
+                    if self.chars.peek() == Some(&'(') {
+                        self.chars.next();
+                        let body = self.read_process_subst();
+                        self.tokens.push(Token::Redirect(Redirect {
+                            fd: 0,
+                            append: false,
+                            target: RedirectTarget::ProcessSubst(body, true),
+                            dyn_var: None,
+                        }));
+                        continue;
+                    }
                     if self.chars.peek() == Some(&'<') {
                         self.chars.next();
                         if self.chars.peek() == Some(&'<') {
@@ -113,6 +163,7 @@ impl<'a> Lexer<'a> {
                                 fd: 0,
                                 append: false,
                                 target: RedirectTarget::HereString(flatten_literal(&target)),
+                                dyn_var: None,
                             }));
                         } else {
                             let strip_tabs = self.chars.peek() == Some(&'-');
@@ -128,6 +179,7 @@ impl<'a> Lexer<'a> {
                                 fd: 0,
                                 append: false,
                                 target: RedirectTarget::Heredoc(delim, strip_tabs),
+                                dyn_var: None,
                             }));
                         }
                     } else {
@@ -137,11 +189,23 @@ impl<'a> Lexer<'a> {
                             fd: 0,
                             append: false,
                             target: RedirectTarget::File(flatten_literal(&target)),
+                            dyn_var: None,
                         }));
                     }
                 }
                 '>' => {
                     self.chars.next();
+                    if self.chars.peek() == Some(&'(') {
+                        self.chars.next();
+                        let body = self.read_process_subst();
+                        self.tokens.push(Token::Redirect(Redirect {
+                            fd: 1,
+                            append: false,
+                            target: RedirectTarget::ProcessSubst(body, false),
+                            dyn_var: None,
+                        }));
+                        continue;
+                    }
                     let append = self.chars.peek() == Some(&'>');
                     if append {
                         self.chars.next();
@@ -152,6 +216,7 @@ impl<'a> Lexer<'a> {
                         fd: 1,
                         append,
                         target: redirect_target_from_word(&target),
+                        dyn_var: None,
                     }));
                 }
                 '0'..='9' => {
@@ -167,11 +232,85 @@ impl<'a> Lexer<'a> {
                             } else {
                                 redirect_target_from_word(&target)
                             },
+                            dyn_var: None,
                         }));
                     } else {
                         let word = self.read_word();
                         self.tokens.push(Token::Word(word));
                     }
+                }
+                '{' => {
+                    // Check for `{VARNAME}>` / `{VARNAME}>>` / `{VARNAME}<`
+                    // which means dynamic fd redirect.
+                    let mut lookahead = self.chars.clone();
+                    lookahead.next(); // consume '{'
+                    let mut varname = String::new();
+                    while let Some(&c) = lookahead.peek() {
+                        if c.is_alphanumeric() || c == '_' {
+                            varname.push(c);
+                            lookahead.next();
+                        } else {
+                            break;
+                        }
+                    }
+                    if !varname.is_empty() && lookahead.peek() == Some(&'}') {
+                        lookahead.next(); // consume '}'
+                        match lookahead.peek() {
+                            Some('>') => {
+                                // It's a dynamic fd redirect, e.g. `{FD}>file`
+                                lookahead.next(); // '>'
+                                let append = lookahead.peek() == Some(&'>');
+                                if append { lookahead.next(); }
+                                // Consume from original iterator
+                                self.chars.next(); // '{'
+                                for _ in 0..varname.len() {
+                                    self.chars.next();
+                                }
+                                self.chars.next(); // '}'
+                                self.chars.next(); // '>'
+                                if append { self.chars.next(); }
+                                self.skip_spaces();
+                                let target = self.read_redirect_word();
+                                self.tokens.push(Token::Redirect(Redirect {
+                                    fd: -2,
+                                    append,
+                                    target: redirect_target_from_word(&target),
+                                    dyn_var: Some(varname),
+                                }));
+                                continue;
+                            }
+                            Some('<') => {
+                                // `{VARNAME}<<<` heredoc or `{VARNAME}<file`
+                                lookahead.next(); // '<'
+                                if lookahead.peek() == Some(&'<') {
+                                    // `{VARNAME}<<<` — here-string with dynamic fd
+                                    // It's unusual but could be supported.
+                                    // For now, treat as normal word to avoid complexity.
+                                } else {
+                                    // `{VARNAME}<file` — input with dynamic fd
+                                    self.chars.next(); // '{'
+                                    for _ in 0..varname.len() {
+                                        self.chars.next();
+                                    }
+                                    self.chars.next(); // '}'
+                                    self.chars.next(); // '<'
+                                    self.skip_spaces();
+                                    let target = self.read_redirect_word();
+                                    self.tokens.push(Token::Redirect(Redirect {
+                                        fd: -2,
+                                        append: false,
+                                        target: RedirectTarget::File(flatten_literal(&target)),
+                                        dyn_var: Some(varname),
+                                    }));
+                                    continue;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    // Not a dynamic redirect, fall through to read as word
+                    let word = self.read_word();
+                    self.tokens.push(Token::Word(word));
                 }
                 _ => {
                     let word = self.read_word();
@@ -234,7 +373,28 @@ impl<'a> Lexer<'a> {
 
     /// Like `read_word`, but also allows `&` in the word (used for redirect
     /// targets so `>&1`, `N>&1`, etc. are parsed correctly).
-    fn read_redirect_word(&mut self) -> Word {
+    fn read_process_subst(&mut self) -> String {
+        let mut body = String::new();
+        let mut depth = 1usize;
+        while let Some(&c) = self.chars.peek() {
+            self.chars.next();
+            if c == '(' {
+                depth += 1;
+                body.push(c);
+            } else if c == ')' {
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+                body.push(c);
+            } else {
+                body.push(c);
+            }
+        }
+        body
+    }
+
+fn read_redirect_word(&mut self) -> Word {
         self.read_word_inner(false)
     }
 
@@ -249,6 +409,8 @@ impl<'a> Lexer<'a> {
         let mut current = String::new();
         let mut any_quotes = false;
         let mut at_word_start = true;
+        let mut in_extglob = false;
+        let mut extglob_depth = 0;
 
         macro_rules! flush_literal {
             () => {
@@ -265,6 +427,37 @@ impl<'a> Lexer<'a> {
                 break;
             }
             match c {
+                '@' | '*' | '+' | '?' | '!' if self.chars.peek() == Some(&'(') => {
+                    // Extended glob pattern: @(...), *(...), +(...), ?(...), !(...)
+                    // But first check if it's a glob qualifier like *(/) or *(.)
+                    // We'll handle glob qualifiers after this match by looking ahead
+                    let op = c;
+                    self.chars.next(); // consume the operator
+                    self.chars.next(); // consume '('
+                    flush_literal!();
+                    let mut pattern = String::new();
+                    let mut depth = 1;
+                    while let Some(&pc) = self.chars.peek() {
+                        self.chars.next();
+                        if pc == '(' {
+                            depth += 1;
+                            pattern.push(pc);
+                        } else if pc == ')' {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                            pattern.push(pc);
+                        } else {
+                            pattern.push(pc);
+                        }
+                    }
+                    // Store as a literal that will be expanded later
+                    current.push(op);
+                    current.push('(');
+                    current.push_str(&pattern);
+                    current.push(')');
+                }
                 '|' | ';' | '<' | '>' => break,
                 '&' if break_on_ampersand => break,
                 '\'' => {
@@ -306,6 +499,35 @@ impl<'a> Lexer<'a> {
                         self.chars.next();
                     }
                     segments.push(WordSegment::Tilde(rest));
+                }
+                '@' | '*' | '+' | '?' | '!' if self.chars.peek() == Some(&'(') => {
+                    // Extended glob pattern: @(...), *(...), +(...), ?(...), !(...)
+                    let op = c;
+                    self.chars.next(); // consume the operator
+                    self.chars.next(); // consume '('
+                    flush_literal!();
+                    let mut pattern = String::new();
+                    let mut depth = 1;
+                    while let Some(&pc) = self.chars.peek() {
+                        self.chars.next();
+                        if pc == '(' {
+                            depth += 1;
+                            pattern.push(pc);
+                        } else if pc == ')' {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                            pattern.push(pc);
+                        } else {
+                            pattern.push(pc);
+                        }
+                    }
+                    // Store as a literal that will be expanded later
+                    current.push(op);
+                    current.push('(');
+                    current.push_str(&pattern);
+                    current.push(')');
                 }
                 '$' => {
                     let mut cloned = self.chars.clone();
@@ -507,6 +729,7 @@ impl<'a> Lexer<'a> {
 /// `NAME:=word`, `NAME:?word`, `NAME#pattern`, `NAME##pattern`, `NAME%pattern`,
 /// `NAME%%pattern`, `NAME/pat/repl`, `NAME//pat/repl`, or `!NAME`.
 fn parse_brace_body(body: &str) -> WordSegment {
+    // Check for colon-based expansions first: ${VAR:-word}, ${VAR:=word}, ${VAR:?word}, ${VAR:+word}
     if let Some(pos) = body.find(":+").filter(|&p| is_valid_param_name(&body[..p])) {
         return WordSegment::ParamOp(body[..pos].to_string(), '+', body[pos + 2..].to_string());
     }
@@ -520,36 +743,40 @@ fn parse_brace_body(body: &str) -> WordSegment {
         return WordSegment::ParamOp(body[..pos].to_string(), '?', body[pos + 2..].to_string());
     }
 
+    // Check for prefix removal: ${VAR#pattern}, ${VAR##pattern}
     if let Some(pos) = body.find('#').filter(|&p| is_valid_param_name(&body[..p])) {
         let name = &body[..pos];
         let rest = &body[pos + 1..];
         if rest.starts_with('#') {
-            return WordSegment::ParamOp(name.to_string(), 'H', rest[1..].to_string());
+            return WordSegment::ParamOp(name.to_string(), 'H', rest[1..].to_string()); // 'H' for double #
         } else {
             return WordSegment::ParamOp(name.to_string(), '#', rest.to_string());
         }
     }
 
+    // Check for suffix removal: ${VAR%pattern}, ${VAR%%pattern}
     if let Some(pos) = body.find('%').filter(|&p| is_valid_param_name(&body[..p])) {
         let name = &body[..pos];
         let rest = &body[pos + 1..];
         if rest.starts_with('%') {
-            return WordSegment::ParamOp(name.to_string(), 'P', rest[1..].to_string());
+            return WordSegment::ParamOp(name.to_string(), 'P', rest[1..].to_string()); // 'P' for double %
         } else {
             return WordSegment::ParamOp(name.to_string(), '%', rest.to_string());
         }
     }
 
+    // Check for substitution: ${VAR/pat/repl}, ${VAR//pat/repl}
     if let Some(pos) = body.find('/').filter(|&p| is_valid_param_name(&body[..p])) {
         let name = &body[..pos];
         let rest = &body[pos + 1..];
         if rest.starts_with('/') {
-            return WordSegment::ParamOp(name.to_string(), 'D', rest[1..].to_string());
+            return WordSegment::ParamOp(name.to_string(), 'D', rest[1..].to_string()); // 'D' for double /
         } else {
             return WordSegment::ParamOp(name.to_string(), '/', rest.to_string());
         }
     }
 
+    // Check for indirect reference: ${!VAR}
     if body.starts_with('!') && is_valid_param_name(&body[1..]) {
         return WordSegment::ParamOp(body[1..].to_string(), '!', String::new());
     }
@@ -583,17 +810,8 @@ fn flatten_literal(word: &Word) -> String {
             WordSegment::ParamOp(name, op, word) => {
                 out.push_str("${");
                 out.push_str(name);
-                match op {
-                    '+' | '-' | '=' | '?' => {
-                        out.push(':');
-                        out.push(*op);
-                    }
-                    'H' => out.push_str("##"),
-                    'P' => out.push_str("%%"),
-                    'D' => out.push_str("//"),
-                    '!' => { out.push('!'); }
-                    _ => out.push(*op),
-                }
+                out.push(':');
+                out.push(*op);
                 out.push_str(word);
                 out.push('}');
             }
@@ -609,9 +827,32 @@ fn flatten_literal(word: &Word) -> String {
 
 fn redirect_target_from_word(word: &Word) -> RedirectTarget {
     let flat = flatten_literal(word);
+
+    // Detect {VARNAME} for dynamic FD allocation, e.g. `exec {FD}>file`
+    if flat.starts_with('{') && flat.ends_with('}') && flat.len() > 2 {
+        let varname = flat[1..flat.len()-1].to_string();
+        if !varname.is_empty() && varname.chars().all(|c| c.is_alphanumeric() || c == '_') {
+            return RedirectTarget::Dynamic(varname);
+        }
+    }
+
+    // If the word starts with '&' but has variable references that flatten_literal
+    // dropped (e.g. `>&$FD`), defer resolution to expansion time.
+    if flat.starts_with('&') && word.segments.len() > 1 {
+        return RedirectTarget::LazyWord(word.segments.clone());
+    }
+
     if let Some(stripped) = flat.strip_prefix('&') {
         if let Ok(n) = stripped.parse::<i32>() {
             return RedirectTarget::Fd(n);
+        }
+    }
+    if flat.starts_with('&') || flat.ends_with('-') {
+        let fd = flat.trim_matches(|c| c == '&' || c == '-').parse::<i32>().unwrap_or(1);
+        if flat.contains('-') {
+            // Return Close with sentinel 0; the executor always uses the
+            // redirect's own `fd` field to know which descriptor to close.
+            return RedirectTarget::Close(0);
         }
     }
     RedirectTarget::File(flat)
@@ -736,4 +977,37 @@ fn parse_ansi_c_string(s: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extglob_tokenization() {
+        let input = "echo @(file1|file2)";
+        let tokens = tokenize(input);
+        println!("Tokens: {:?}", tokens);
+        assert_eq!(tokens.len(), 2);
+        match &tokens[0] {
+            Token::Word(w) => {
+                let s = w.segments.iter().map(|seg| match seg {
+                    WordSegment::Literal(s) => s.clone(),
+                    _ => String::new(),
+                }).collect::<String>();
+                assert_eq!(s, "echo");
+            }
+            _ => panic!("Expected Word token"),
+        }
+        match &tokens[1] {
+            Token::Word(w) => {
+                let s = w.segments.iter().map(|seg| match seg {
+                    WordSegment::Literal(s) => s.clone(),
+                    _ => String::new(),
+                }).collect::<String>();
+                assert_eq!(s, "@(file1|file2)");
+            }
+            _ => panic!("Expected Word token"),
+        }
+    }
 }

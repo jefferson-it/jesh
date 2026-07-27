@@ -1,4 +1,4 @@
-//! Shared utility helpers for `bjesh`.
+//! Shared utility helpers for `jsh`.
 //!
 //! Cross-module helpers (string/path expansion) used by several subsystems.
 
@@ -593,4 +593,19 @@ mod tests {
         assert_eq!(expand_braces("plain"), vec!["plain"]);
         assert_eq!(expand_braces("{single}"), vec!["{single}"]);
     }
+}
+
+pub fn kitty_send_image(_data: &[u8], _format: &str, _x: i32, _y: i32, _w: i32) {}
+pub fn osc8_hyperlink(text: &str, url: &str) {
+    let _ = (text, url);
+}
+pub fn osc133_command_start() {}
+pub fn osc133_command_end(exit_code: i32) {
+    let _ = exit_code;
+}
+pub fn pasted_text_contains_metacharacters(text: &str) -> bool {
+    text.contains(' ') || text.contains('?') || text.contains('&') || text.contains('|')
+}
+pub fn smart_paste_escape(text: &str) -> String {
+    text.to_string()
 }

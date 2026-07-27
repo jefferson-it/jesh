@@ -7,11 +7,60 @@ use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
 use crossterm::style::Stylize;
+use nix::unistd::{getppid, getuid, getgroups};
 
 use crate::completion::CompletionDb;
 use crate::parser::{Word, WordSegment};
+use crate::utils;
+
+fn command_exists(name: &str) -> bool {
+    let path_var = match env::var_os("PATH") {
+        Some(p) => p,
+        None => return false,
+    };
+    env::split_paths(&path_var).any(|dir| {
+        let full = dir.join(name);
+        full.is_file() && full.metadata().ok().map_or(false, |m| {
+            use std::os::unix::fs::PermissionsExt;
+            m.permissions().mode() & 0o111 != 0
+        })
+    })
+}
+
+fn register_modern_cli_aliases(aliases: &mut HashMap<String, String>) {
+    if command_exists("eza") {
+        aliases.insert("ls".to_string(), "eza --color=auto --icons".to_string());
+        aliases.insert("ll".to_string(), "eza -la --color=auto --icons".to_string());
+        aliases.insert("lt".to_string(), "eza --tree --level=2 --color=auto --icons".to_string());
+    } else if command_exists("exa") {
+        aliases.insert("ls".to_string(), "exa --color=auto --icons".to_string());
+        aliases.insert("ll".to_string(), "exa -la --color=auto --icons".to_string());
+    }
+    if command_exists("bat") {
+        aliases.insert("cat".to_string(), "bat --paging=never".to_string());
+    }
+    if command_exists("rg") {
+        aliases.insert("grep".to_string(), "rg --color=always".to_string());
+    }
+    if command_exists("fd") {
+        aliases.insert("find".to_string(), "fd --type f --hidden --exclude .git".to_string());
+    }
+    if command_exists("htop") {
+        aliases.insert("top".to_string(), "htop".to_string());
+    }
+}
 
 pub mod history;
+
+#[derive(Debug, Clone, Default)]
+pub struct VarAttrs {
+    pub integer: bool,
+    pub array: bool,
+    pub assoc: bool,
+    pub readonly: bool,
+    pub exported: bool,
+    pub local: bool,
+}
 
 pub struct ShellState {
     pub last_exit_status: i32,
@@ -22,6 +71,8 @@ pub struct ShellState {
     /// Shell-local variables (`NAME=value`), distinct from process env vars.
     /// Looked up before falling back to `env::var`.
     pub shell_vars: Arc<Mutex<HashMap<String, String>>>,
+    /// Variable attributes (integer, array, assoc, readonly, exported, local)
+    pub var_attrs: Arc<Mutex<HashMap<String, VarAttrs>>>,
     /// Names of shell vars that have been `export`ed to the process env.
     pub exported: HashSet<String>,
     /// Name jesh was invoked as / script path, used for `$0`.
@@ -46,7 +97,12 @@ pub struct ShellState {
     /// Stack of positional-parameter frames for nested function calls;
     /// the top frame is used to resolve `$1`, `$2`, `$@`, `$#` while a
     /// function body is executing.
-    positional_stack: Vec<Vec<String>>,
+    pub positional_stack: Vec<Vec<String>>,
+    /// Stack of variable attribute frames for nested function calls (for `local`).
+    /// Each frame maps variable names to their saved attributes for restoration on return.
+    pub var_attrs_stack: Vec<HashMap<String, VarAttrs>>,
+    /// Stack of variable value frames for nested function calls (for `local`).
+    pub var_values_stack: Vec<HashMap<String, String>>,
     /// Last-seen modification time of `.jshrc`, used to detect edits for
     /// hot-reloading. `None` until the file is first loaded.
     pub jeshrc_mtime: Option<SystemTime>,
@@ -58,8 +114,24 @@ pub struct ShellState {
     /// Whether the shell is currently running in an interactive session.
     pub is_interactive: bool,
     pub history_mgr: Arc<history::HistoryManager>,
-    pub completions: Arc<CompletionDb>,
+    pub completions: Arc<Mutex<CompletionDb>>,
     pub dir_stack: Vec<PathBuf>,
+    pub pipestatus: Vec<i32>,
+    pub pipefail: bool,
+    pub readonly_vars: HashSet<String>,
+    pub glob_nullglob: bool,
+    pub glob_failglob: bool,
+    pub glob_dotglob: bool,
+    pub glob_nocaseglob: bool,
+    pub glob_extglob: bool,
+    pub bg_jobs: Arc<Mutex<Vec<BgJob>>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BgJob {
+    pub pid: u32,
+    pub command: String,
+    pub start_time: SystemTime,
 }
 
 impl ShellState {
@@ -94,6 +166,7 @@ impl ShellState {
             map.insert("grep".to_string(), "grep --color=auto".to_string());
             map.insert("ll".to_string(), "ls -la --color=auto".to_string());
             map.insert("c".to_string(), "clear".to_string());
+            register_modern_cli_aliases(&mut map);
         }
 
         let history_mgr = Arc::new(history::HistoryManager::new());
@@ -111,7 +184,7 @@ impl ShellState {
         let mut cached_os_logo: Option<String> = None;
         let mut bash_cmd_neg_cache: HashSet<String> = HashSet::new();
         let mut is_interactive = false;
-        let mut completions = Arc::new(CompletionDb::new());
+        let mut completions = Arc::new(Mutex::new(CompletionDb::new()));
         let mut dir_stack: Vec<PathBuf> = Vec::new();
         let jeshrc_mtime: Option<SystemTime> = None;
 
@@ -135,6 +208,43 @@ impl ShellState {
             history_mgr,
             completions,
             dir_stack: Vec::new(),
+            pipestatus: Vec::new(),
+            pipefail: false,
+            readonly_vars: HashSet::new(),
+            var_attrs: Arc::new(Mutex::new(HashMap::new())),
+            var_attrs_stack: Vec::new(),
+            var_values_stack: Vec::new(),
+            glob_nullglob: false,
+            glob_failglob: false,
+            glob_dotglob: false,
+            glob_nocaseglob: false,
+            glob_extglob: false,
+            bg_jobs: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    pub fn check_bg_jobs(&self) {
+        let mut jobs = self.bg_jobs.lock().unwrap();
+        let mut i = 0;
+        while i < jobs.len() {
+            let pid = jobs[i].pid as libc::pid_t;
+            let mut status: i32 = 0;
+            let ret = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+            if ret == pid {
+                let exit_code = unsafe { libc::WEXITSTATUS(status) };
+                let cmd = &jobs[i].command;
+                let elapsed = jobs[i].start_time.elapsed().map(|d| d.as_secs_f64()).unwrap_or(0.0);
+                if exit_code == 0 {
+                    eprintln!("\r\x1B[32m[done]\x1B[0m {} ({}s)      ", cmd, elapsed);
+                } else {
+                    eprintln!("\r\x1B[31m[done]\x1B[0m {} (exit {}) ({}s)      ", cmd, exit_code, elapsed);
+                }
+                jobs.remove(i);
+            } else if ret == -1 {
+                jobs.remove(i);
+            } else {
+                i += 1;
+            }
         }
     }
 
@@ -156,6 +266,9 @@ SHOW_TIMING=true
 # Tab completion mode: \"interactive\" (default) shows a horizontal menu
 # with Tab/Shift+Tab navigation and Enter to select.
 # Set to \"circular\" for the traditional inline cycle behavior.
+# Set to \"hybrid\" for the pro autocomplete: combines circular cycling
+# with the interactive menu — shows a counter (2/5), a live preview of
+# the replacement, and circular navigation (Tab wraps, Shift+Tab wraps).
 # JSH_TAB_MODE=interactive
 
 alias c=\"clear\"
@@ -389,7 +502,9 @@ export PATH=$PATH:/usr/local/bin
             return 127;
         };
         self.positional_stack.push(args.to_vec());
+        self.push_local_scope();
         self.run_script_text(&body);
+        self.pop_local_scope();
         self.positional_stack.pop();
         self.last_exit_status
     }
@@ -429,6 +544,31 @@ export PATH=$PATH:/usr/local/bin
                 }
                 return "0".to_string();
             }
+            "PIPESTATUS" => {
+                return self.pipestatus.iter()
+                    .map(|s| s.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+            }
+            "IFS" => {
+                // Return the IFS value from shell vars or default
+                if let Some(v) = self.shell_vars.lock().unwrap().get("IFS").cloned() {
+                    return v;
+                }
+                return " \t\n".to_string();
+            }
+            "PPID" => {
+                return getppid().to_string();
+            }
+            "UID" => {
+                return getuid().as_raw().to_string();
+            }
+            "GROUPS" => {
+                if let Ok(groups) = getgroups() {
+                    return groups.iter().map(|g| g.as_raw().to_string()).collect::<Vec<_>>().join(" ");
+                }
+                return String::new();
+            }
             _ if name.len() <= 2 && name.chars().all(|c| c.is_ascii_digit()) && !name.is_empty() => {
                 if let Ok(idx) = name.parse::<usize>() {
                     if idx >= 1 {
@@ -453,16 +593,79 @@ export PATH=$PATH:/usr/local/bin
     /// semantics: `:-` substitutes `word` when NAME is unset/empty,
     /// otherwise keeps NAME's value; `:+` substitutes `word` when NAME is
     /// set/non-empty, otherwise expands to nothing.
-    pub fn expand_param_op(&self, name: &str, op: char, word: &str) -> String {
+    pub fn expand_param_op(&mut self, name: &str, op: char, word: &str) -> String {
         let current = self.get_var(name);
-        let want_word = match op {
-            '-' => current.is_empty(),
-            '+' => !current.is_empty(),
-            _ => false,
-        };
-        if !want_word {
-            return if op == '-' { current } else { String::new() };
+        match op {
+            '-' => {
+                // ${VAR:-word}: use word if VAR is unset/empty
+                if current.is_empty() {
+                    self.expand_param_word(word)
+                } else {
+                    current
+                }
+            }
+            '+' => {
+                // ${VAR:+word}: use word if VAR is set/non-empty
+                if current.is_empty() {
+                    String::new()
+                } else {
+                    self.expand_param_word(word)
+                }
+            }
+            '=' => {
+                // ${VAR:=word}: assign word to VAR if unset/empty, then return value
+                if current.is_empty() {
+                    let expanded = self.expand_param_word(word);
+                    self.set_var(name, &expanded);
+                    expanded
+                } else {
+                    current
+                }
+            }
+            '?' => {
+                // ${VAR:?word}: error if unset/empty, else return value
+                if current.is_empty() {
+                    let expanded = self.expand_param_word(word);
+                    eprintln!("{}: {}", name, expanded);
+                    std::process::exit(1);
+                } else {
+                    current
+                }
+            }
+            '#' => {
+                // ${VAR#pattern}: remove shortest prefix
+                self.expand_prefix_removal(name, word, false)
+            }
+            'H' => {
+                // ${VAR##pattern}: remove longest prefix
+                self.expand_prefix_removal(name, word, true)
+            }
+            '%' => {
+                // ${VAR%pattern}: remove shortest suffix
+                self.expand_suffix_removal(name, word, false)
+            }
+            'P' => {
+                // ${VAR%%pattern}: remove longest suffix
+                self.expand_suffix_removal(name, word, true)
+            }
+            '/' => {
+                // ${VAR/pat/repl}: substitute first match
+                self.expand_subst(name, word, false)
+            }
+            'D' => {
+                // ${VAR//pat/repl}: substitute all (global)
+                self.expand_subst(name, word, true)
+            }
+            '!' => {
+                // ${!VAR}: indirect reference
+                let var_name = self.get_var(name);
+                self.get_var(&var_name)
+            }
+            _ => current,
         }
+    }
+
+    fn expand_param_word(&mut self, word: &str) -> String {
         let tokens = crate::parser::lexer::tokenize(word);
         let parsed_word = tokens.into_iter().find_map(|t| match t {
             crate::parser::lexer::Token::Word(w) => Some(w),
@@ -474,7 +677,88 @@ export PATH=$PATH:/usr/local/bin
         }
     }
 
-    pub fn expand_string(&self, word: &str) -> String {
+    fn expand_prefix_removal(&self, name: &str, pattern: &str, is_longest: bool) -> String {
+        let current = self.get_var(name);
+        if current.is_empty() || pattern.is_empty() {
+            return current;
+        }
+        if is_longest {
+            // ${VAR##pattern}: remove longest matching prefix (glob)
+            for len in (1..=current.len()).rev() {
+                if Self::match_simple_pattern(&current[..len], pattern) {
+                    return current[len..].to_string();
+                }
+            }
+        } else {
+            // ${VAR#pattern}: remove shortest matching prefix (glob)
+            for len in 1..=current.len() {
+                if Self::match_simple_pattern(&current[..len], pattern) {
+                    return current[len..].to_string();
+                }
+            }
+        }
+        current
+    }
+
+    fn expand_suffix_removal(&self, name: &str, pattern: &str, is_longest: bool) -> String {
+        let current = self.get_var(name);
+        if current.is_empty() || pattern.is_empty() {
+            return current;
+        }
+        if is_longest {
+            // ${VAR%%pattern}: remove longest matching suffix (glob)
+            for len in (1..=current.len()).rev() {
+                if Self::match_simple_pattern(&current[current.len() - len..], pattern) {
+                    return current[..current.len() - len].to_string();
+                }
+            }
+        } else {
+            // ${VAR%pattern}: remove shortest matching suffix (glob)
+            for len in 1..=current.len() {
+                if Self::match_simple_pattern(&current[current.len() - len..], pattern) {
+                    return current[..current.len() - len].to_string();
+                }
+            }
+        }
+        current
+    }
+
+    fn glob_to_regex_str(pattern: &str) -> String {
+        let mut regex_str = String::new();
+        for c in pattern.chars() {
+            match c {
+                '*' => regex_str.push_str(".*"),
+                '?' => regex_str.push('.'),
+                '[' => regex_str.push('['),
+                ']' => regex_str.push(']'),
+                c if c.is_ascii_punctuation() => regex_str.push_str(&regex::escape(&c.to_string())),
+                c => regex_str.push(c),
+            }
+        }
+        regex_str
+    }
+
+    fn expand_subst(&self, name: &str, word: &str, global: bool) -> String {
+        let current = self.get_var(name);
+        if let Some(slash_pos) = word.find('/') {
+            let pattern = &word[..slash_pos];
+            let replacement = &word[slash_pos + 1..];
+            let regex_str = Self::glob_to_regex_str(pattern);
+            if let Ok(re) = regex::Regex::new(&regex_str) {
+                if global {
+                    re.replace_all(&current, replacement).to_string()
+                } else {
+                    re.replace(&current, replacement).to_string()
+                }
+            } else {
+                current
+            }
+        } else {
+            current
+        }
+    }
+
+    pub fn expand_string(&mut self, word: &str) -> String {
         let tokens = crate::parser::lexer::tokenize(word);
         let parsed_word = tokens.into_iter().find_map(|t| match t {
             crate::parser::lexer::Token::Word(w) => Some(w),
@@ -514,10 +798,142 @@ export PATH=$PATH:/usr/local/bin
 
     pub fn unset_var(&mut self, name: &str) {
         self.shell_vars.lock().unwrap().remove(name);
+        self.var_attrs.lock().unwrap().remove(name);
         self.exported.remove(name);
+        self.readonly_vars.remove(name);
         unsafe {
             env::remove_var(name);
         }
+    }
+
+    /// Get variable attributes, creating default if not exist
+    pub fn get_var_attrs(&self, name: &str) -> VarAttrs {
+        self.var_attrs.lock().unwrap().get(name).cloned().unwrap_or_default()
+    }
+
+    /// Set variable attributes
+    pub fn set_var_attrs(&mut self, name: &str, attrs: VarAttrs) {
+        self.var_attrs.lock().unwrap().insert(name.to_string(), attrs);
+    }
+
+    /// Check if variable has integer attribute
+    pub fn is_integer_var(&self, name: &str) -> bool {
+        self.get_var_attrs(name).integer
+    }
+
+    /// Check if variable is readonly
+    pub fn is_readonly_var(&self, name: &str) -> bool {
+        self.readonly_vars.contains(name) || self.get_var_attrs(name).readonly
+    }
+
+    /// Check if variable is an array (indexed)
+    pub fn is_array_var(&self, name: &str) -> bool {
+        self.get_var_attrs(name).array
+    }
+
+    /// Check if variable is an associative array
+    pub fn is_assoc_var(&self, name: &str) -> bool {
+        self.get_var_attrs(name).assoc
+    }
+
+    /// Set a variable with integer attribute (evaluates arithmetic expression)
+    pub fn set_integer_var(&mut self, name: &str, value: &str) -> Result<i64, String> {
+        let expanded = crate::utils::expand_env_vars_with(value, |n| self.get_var(n));
+        let result = crate::utils::eval_arithmetic(&expanded, |n| self.get_var(n))?;
+        self.set_var(name, &result.to_string());
+        let mut attrs = self.get_var_attrs(name);
+        attrs.integer = true;
+        self.set_var_attrs(name, attrs);
+        Ok(result)
+    }
+
+    /// Push a new local variable scope frame (for function calls with `local`)
+    pub fn push_local_scope(&mut self) {
+        self.var_attrs_stack.push(HashMap::new());
+        self.var_values_stack.push(HashMap::new());
+    }
+
+    /// Pop the local variable scope frame, restoring previous values
+    pub fn pop_local_scope(&mut self) {
+        if let Some(local_attrs) = self.var_attrs_stack.pop() {
+            let mut attrs = self.var_attrs.lock().unwrap();
+            for (name, saved_attrs) in local_attrs {
+                if let Some(current) = attrs.get_mut(&name) {
+                    *current = saved_attrs;
+                } else {
+                    attrs.remove(&name);
+                }
+            }
+        }
+        if let Some(local_values) = self.var_values_stack.pop() {
+            let mut vars = self.shell_vars.lock().unwrap();
+            for (name, saved_value) in local_values {
+                if let Some(current) = vars.get_mut(&name) {
+                    *current = saved_value;
+                } else {
+                    vars.remove(&name);
+                }
+            }
+        }
+    }
+
+    /// Declare a local variable in the current function scope
+    pub fn declare_local(&mut self, name: &str, value: Option<&str>, attrs: VarAttrs) {
+        // Save current value and attrs if they exist (for restoration on scope exit)
+        let current_attrs = self.get_var_attrs(name);
+        if let Some(frame) = self.var_attrs_stack.last_mut() {
+            if !frame.contains_key(name) {
+                frame.insert(name.to_string(), current_attrs);
+            }
+        }
+        if let Some(frame) = self.var_values_stack.last_mut() {
+            if !frame.contains_key(name) {
+                if let Some(v) = self.shell_vars.lock().unwrap().get(name).cloned() {
+                    frame.insert(name.to_string(), v);
+                }
+            }
+        }
+        // Set new value and attrs
+        if let Some(v) = value {
+            self.set_var(name, v);
+        } else {
+            // For local without assignment, create empty variable
+            self.shell_vars.lock().unwrap().entry(name.to_string()).or_insert_with(String::new);
+        }
+        let mut new_attrs = attrs;
+        new_attrs.local = true;
+        self.set_var_attrs(name, new_attrs);
+    }
+
+    /// Check if we're in a function scope (have local frames)
+    pub fn in_function_scope(&self) -> bool {
+        !self.var_attrs_stack.is_empty()
+    }
+
+    /// Make a variable readonly
+    pub fn make_readonly(&mut self, name: &str) {
+        self.readonly_vars.insert(name.to_string());
+        let mut attrs = self.get_var_attrs(name);
+        attrs.readonly = true;
+        self.set_var_attrs(name, attrs);
+    }
+
+    /// Export a variable (mark as exported and set in environment)
+    pub fn export_var_attrs(&mut self, name: &str, value: Option<&str>) {
+        if let Some(v) = value {
+            self.shell_vars.lock().unwrap().insert(name.to_string(), v.to_string());
+            unsafe {
+                env::set_var(name, v);
+            }
+        } else if let Some(v) = self.shell_vars.lock().unwrap().get(name).cloned() {
+            unsafe {
+                env::set_var(name, &v);
+            }
+        }
+        self.exported.insert(name.to_string());
+        let mut attrs = self.get_var_attrs(name);
+        attrs.exported = true;
+        self.set_var_attrs(name, attrs);
     }
 
     /// Detects a leading `NAME=value` assignment word (POSIX-style, no
@@ -553,7 +969,8 @@ export PATH=$PATH:/usr/local/bin
     /// Expands a single `Word` into one or more resulting strings.
     /// Quoted/single-segment words never glob or split; unquoted words with
     /// glob metacharacters expand against the filesystem.
-    pub fn expand_word(&self, word: &Word) -> Vec<String> {
+    pub fn expand_word(&mut self, word: &Word) -> Vec<String> {
+        // eprintln!("DEBUG expand_word ENTRY: word.quoted={}, segments={:?}", word.quoted, word.segments);
         let mut out = String::new();
         for seg in &word.segments {
             match seg {
@@ -596,13 +1013,24 @@ export PATH=$PATH:/usr/local/bin
         }
 
         let braced = crate::utils::expand_braces(&out);
+        // eprintln!("DEBUG expand_word: out='{}', braced={:?}", out, braced);
         let mut final_out = Vec::new();
         for item in braced {
+            // eprintln!("DEBUG expand_word: trying glob on item='{}'", item);
             if let Some(matches) = self.try_glob(&item) {
                 if !matches.is_empty() {
                     final_out.extend(matches);
                     continue;
                 }
+                // matches is empty - this can happen with nullglob
+                // In that case, we don't add the pattern (it expands to nothing)
+                continue;
+            }
+            // try_glob returned None - this means the pattern has glob chars but no matches
+            // Check if failglob is enabled
+            if self.glob_failglob && item.chars().any(|c| matches!(c, '*' | '?' | '[') || matches!(c, '@' | '+' | '?')) {
+                eprintln!("jesh: no matches found: {}", item);
+                return vec![];
             }
             final_out.push(item);
         }
@@ -611,29 +1039,488 @@ export PATH=$PATH:/usr/local/bin
 
     /// Expands a `Word` into a single joined string (used where multiple
     /// results/globbing don't make sense, e.g. redirect targets).
-    pub fn expand_word_single(&self, word: &Word) -> String {
+    pub fn expand_word_single(&mut self, word: &Word) -> String {
         self.expand_word(word).join(" ")
     }
 
     fn try_glob(&self, pattern: &str) -> Option<Vec<String>> {
-        if !pattern.chars().any(|c| matches!(c, '*' | '?' | '[')) {
+        // eprintln!("DEBUG try_glob: pattern='{}', glob_extglob={}, glob_extglob_shell={}", pattern, self.glob_extglob, std::env::var("JESH_EXTGLOB").unwrap_or_default());
+        // Check if pattern has any glob metacharacters
+        let has_basic_glob = pattern.chars().any(|c| matches!(c, '*' | '?' | '['));
+        let has_extglob = self.glob_extglob && pattern.contains('(') && pattern.chars().any(|c| matches!(c, '@' | '*' | '+' | '?' | '!'));
+        // eprintln!("DEBUG try_glob: has_basic_glob={}, has_extglob={}, glob_extglob={}", has_basic_glob, has_extglob, self.glob_extglob);
+        
+        if !has_basic_glob && !has_extglob {
             return None;
         }
-        let mut results: Vec<String> = glob::glob(pattern)
-            .ok()?
-            .filter_map(|entry| entry.ok())
-            .map(|p| p.to_string_lossy().into_owned())
-            .collect();
+
+        // Use custom glob matching for extglob patterns
+        if has_extglob {
+            // eprintln!("DEBUG try_glob: calling try_glob_extended");
+            return self.try_glob_extended(pattern);
+        }
+
+        // Basic glob matching - use our custom regex-based approach to support nocaseglob and dotglob
+        let (dir_part, base_pattern) = Self::split_pattern(pattern);
+        
+        let dir = if dir_part.is_empty() {
+            std::path::PathBuf::from(".")
+        } else {
+            std::path::PathBuf::from(&dir_part)
+        };
+
+        if !dir.is_dir() {
+            return None;
+        }
+
+        // For nocaseglob, convert pattern to lowercase
+        let pattern_for_matching = if self.glob_nocaseglob {
+            base_pattern.to_lowercase()
+        } else {
+            base_pattern.to_string()
+        };
+
+        // Convert glob pattern to regex
+        let regex_pattern = Self::glob_to_regex(&pattern_for_matching);
+        let regex = regex::Regex::new(&regex_pattern).ok()?;
+
+        let mut results = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                
+                // Apply dotglob
+                if !self.glob_dotglob && name.starts_with('.') {
+                    continue;
+                }
+                
+                // Apply nocaseglob
+                let match_name = if self.glob_nocaseglob {
+                    name.to_lowercase()
+                } else {
+                    name.clone()
+                };
+                
+                if regex.is_match(&match_name) {
+                    let full_path = if dir_part.is_empty() {
+                        name
+                    } else {
+                        format!("{}/{}", dir_part, name)
+                    };
+                    results.push(full_path);
+                }
+            }
+        }
+
         if results.is_empty() {
+            if self.glob_nullglob {
+                return Some(vec![]);
+            }
+            if self.glob_failglob {
+                return None;
+            }
             return None;
         }
+
         results.sort();
         Some(results)
     }
 
+/// Extended glob matching for patterns like @(a|b), *(a|b), +(a|b), ?(a|b), !(a|b)
+    fn try_glob_extended(&self, pattern: &str) -> Option<Vec<String>> {
+        // eprintln!("DEBUG try_glob_extended: pattern={}, glob_extglob={}", pattern, self.glob_extglob);
+        // Split pattern into directory and basename parts
+        let (dir_part, base_pattern) = Self::split_pattern(pattern);
+        // eprintln!("DEBUG try_glob_extended: dir_part='{}', base_pattern='{}'", dir_part, base_pattern);
+        
+        let dir = if dir_part.is_empty() {
+            std::path::PathBuf::from(".")
+        } else {
+            std::path::PathBuf::from(&dir_part)
+};
+
+        // eprintln!("DEBUG try_glob_extended: dir.is_dir()={}", dir.is_dir());
+        
+        if !dir.is_dir() {
+            return None;
+        }
+        
+        // For nocaseglob, convert pattern to lowercase
+        let pattern_for_matching = if self.glob_nocaseglob {
+            base_pattern.to_lowercase()
+        } else {
+            base_pattern.to_string()
+        };
+        // eprintln!("DEBUG try_glob_extended: pattern_for_matching='{}', has_bang={}, has_paren={}", pattern_for_matching, pattern_for_matching.contains('!'), pattern_for_matching.contains('('));
+        
+        // Check if pattern contains negative extglob (!(...))
+        if pattern_for_matching.contains('!') && pattern_for_matching.contains('(') {
+            return self.try_glob_extended_negative(&dir, &dir_part, &pattern_for_matching);
+        }
+        
+        // Convert extglob pattern to regex for positive patterns (@, *, +, ?)
+        let regex_pattern = Self::extglob_to_regex(&pattern_for_matching);
+        // eprintln!("DEBUG try_glob_extended: regex_pattern='{}'", regex_pattern);
+        let regex = regex::Regex::new(&regex_pattern).ok()?;
+        
+        let mut results = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                
+                // Apply dotglob
+                if !self.glob_dotglob && name.starts_with('.') {
+                    continue;
+                }
+                
+                // Apply nocaseglob
+                let match_name = if self.glob_nocaseglob {
+                    name.to_lowercase()
+                } else {
+                    name.clone()
+                };
+                // eprintln!("DEBUG try_glob_extended: checking '{}' against regex", match_name);
+                
+                if regex.is_match(&match_name) {
+                    // eprintln!("DEBUG try_glob_extended: MATCH '{}'", name);
+                    let full_path = if dir_part.is_empty() {
+                        name
+                    } else {
+                        format!("{}/{}", dir_part, name)
+                    };
+                    results.push(full_path);
+                }
+            }
+        }
+        
+        if results.is_empty() {
+            // eprintln!("DEBUG try_glob_extended: no matches");
+            if self.glob_nullglob {
+                return Some(vec![]);
+            }
+            if self.glob_failglob {
+                return None;
+            }
+            return None;
+        }
+        
+        results.sort();
+        Some(results)
+    }
+    
+    /// Handle negative extglob patterns like !(a|b) by evaluating in Rust
+    fn try_glob_extended_negative(&self, dir: &std::path::Path, dir_part: &str, pattern: &str) -> Option<Vec<String>> {
+        let mut results = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in std::fs::read_dir(dir).ok()?.flatten() {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                
+                // Apply dotglob
+                if !self.glob_dotglob && name.starts_with('.') {
+                    continue;
+                }
+                
+                // Apply nocaseglob
+                let match_name = if self.glob_nocaseglob {
+                    name.to_lowercase()
+                } else {
+                    name.clone()
+                };
+                
+                // Check if the name matches the negative extglob pattern
+                if Self::match_negative_extglob(&match_name, pattern) {
+                    let full_path = if dir_part.is_empty() {
+                        name
+                    } else {
+                        format!("{}/{}", dir_part, name)
+                    };
+                    results.push(full_path);
+                }
+            }
+        }
+        
+        if results.is_empty() {
+            if self.glob_nullglob {
+                return Some(vec![]);
+            }
+            if self.glob_failglob {
+                return None;
+            }
+            return None;
+        }
+        
+        results.sort();
+        Some(results)
+    }
+    
+    /// Check if a name matches a negative extglob pattern like !(a|b).txt
+    fn match_negative_extglob(name: &str, pattern: &str) -> bool {
+        // Parse pattern for !(alternatives)suffix format
+        // Find the first !(...)
+        let mut chars = pattern.chars().peekable();
+        let mut prefix = String::new();
+        let mut in_negative = false;
+        let mut alternatives = Vec::new();
+        let mut suffix = String::new();
+        let mut paren_depth = 0;
+        let mut in_parens = false;
+        
+        while let Some(c) = chars.next() {
+            if c == '!' && chars.peek() == Some(&'(') && !in_parens {
+                // Found negative extglob start
+                in_negative = true;
+                chars.next(); // consume '('
+                let mut alt = String::new();
+                let mut depth = 1;
+                while let Some(c) = chars.next() {
+                    if c == '(' {
+                        depth += 1;
+                        alt.push(c);
+                    } else if c == ')' {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                        alt.push(c);
+                    } else {
+                        alt.push(c);
+                    }
+                }
+                // Split alternatives by |
+                alternatives = alt.split('|').map(|s| s.to_string()).collect();
+                // Rest is suffix
+                suffix = chars.collect();
+                break;
+            } else {
+                prefix.push(c);
+            }
+        }
+        
+        if in_negative {
+            if prefix.is_empty() {
+                if suffix.is_empty() {
+                    // Pattern is !(alternatives)
+                    for alt in &alternatives {
+                        if Self::match_simple_pattern(name, alt) {
+                            return false;
+                        }
+                    }
+                    return true;
+                } else {
+                    // Pattern is !(alternatives)suffix
+                    if name.ends_with(&suffix) {
+                        let stem = &name[..name.len() - suffix.len()];
+                        for alt in &alternatives {
+                            if Self::match_simple_pattern(stem, alt) {
+                                return false;
+                            }
+                        }
+                        return true;
+                    }
+                    return false;
+                }
+            }
+        }
+        
+        // Fallback: use regex for complex patterns
+        let regex_pattern = Self::extglob_to_regex(pattern);
+        if let Ok(regex) = regex::Regex::new(&regex_pattern) {
+            regex.is_match(pattern)
+        } else {
+            false
+        }
+    }
+    
+    /// Simple pattern matching for alternatives (supports *, ?, [...])
+    fn match_simple_pattern(text: &str, pattern: &str) -> bool {
+        // Convert simple glob pattern to regex
+        let mut regex_str = String::new();
+        regex_str.push('^');
+        for c in pattern.chars() {
+            match c {
+                '*' => regex_str.push_str(".*"),
+                '?' => regex_str.push('.'),
+                '[' => regex_str.push('['),
+                ']' => regex_str.push(']'),
+                c if c.is_ascii_punctuation() => regex_str.push_str(&regex::escape(&c.to_string())),
+                c => regex_str.push(c),
+            }
+        }
+        regex_str.push('$');
+        if let Ok(regex) = regex::Regex::new(&regex_str) {
+            regex.is_match(text)
+        } else {
+            false
+        }
+    }
+
+    /// Split a pattern into directory part and basename pattern
+    fn split_pattern(pattern: &str) -> (String, String) {
+        if let Some(pos) = pattern.rfind('/') {
+            let (dir, base) = pattern.split_at(pos + 1);
+            (dir.to_string(), base.to_string())
+        } else {
+            (String::new(), pattern.to_string())
+        }
+    }
+
+    /// Convert extended glob pattern to regex
+    fn extglob_to_regex(pattern: &str) -> String {
+        let mut result = String::new();
+        let mut chars = pattern.chars().peekable();
+        
+        while let Some(c) = chars.next() {
+            match c {
+                '@' | '*' | '+' | '?' | '!' if chars.peek() == Some(&'(') => {
+                    chars.next(); // consume '('
+                    let op = c;
+                    let mut inner = String::new();
+                    let mut depth = 1;
+                    while let Some(ic) = chars.next() {
+                        if ic == '(' {
+                            depth += 1;
+                            inner.push(ic);
+                        } else if ic == ')' {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                            inner.push(ic);
+                        } else {
+                            inner.push(ic);
+                        }
+                    }
+                    // Split by | for alternatives
+                    let alternatives: Vec<&str> = inner.split('|').collect();
+                    // Convert each alternative to regex (without ^$ anchors)
+                    let alt_regex: Vec<String> = alternatives.iter()
+                        .map(|a| Self::glob_to_regex_inner(a))
+                        .collect();
+                    let joined = alt_regex.join("|");
+                    
+                    match op {
+                        '@' => result.push_str(&format!("(?:{})", joined)),       // exactly one
+                        '*' => result.push_str(&format!("(?:{})*", joined)),      // zero or more
+                        '+' => result.push_str(&format!("(?:{})+", joined)),      // one or more
+                        '?' => result.push_str(&format!("(?:{})?", joined)),      // zero or one
+                        '!' => result.push_str(&format!("(?:(?!{}).)*", joined)), // not matching (any chars not starting with pattern)
+                        _ => {}
+                    }
+                }
+                '[' => {
+                    // Character class - pass through to glob_to_regex
+                    let mut class = String::new();
+                    class.push('[');
+                    while let Some(ic) = chars.next() {
+                        class.push(ic);
+                        if ic == ']' {
+                            break;
+                        }
+                    }
+                    result.push_str(&Self::glob_to_regex(&class));
+                }
+                _ => {
+                    // Escape special regex chars, then convert glob chars
+                    result.push_str(&Self::glob_char_to_regex(c));
+                }
+            }
+        }
+        
+        format!("^{}$", result)
+    }
+
+    /// Convert extended glob pattern to regex (inner version without ^$ anchors)
+    fn extglob_to_regex_inner(pattern: &str) -> String {
+        let mut result = String::new();
+        let mut chars = pattern.chars().peekable();
+        
+        while let Some(c) = chars.next() {
+            match c {
+                '@' | '*' | '+' | '?' | '!' if chars.peek() == Some(&'(') => {
+                    chars.next(); // consume '('
+                    let op = c;
+                    let mut inner = String::new();
+                    let mut depth = 1;
+                    while let Some(ic) = chars.next() {
+                        if ic == '(' {
+                            depth += 1;
+                            inner.push(ic);
+                        } else if ic == ')' {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                            inner.push(ic);
+                        } else {
+                            inner.push(ic);
+                        }
+                    }
+                    let alternatives: Vec<&str> = inner.split('|').collect();
+                    let alt_regex: Vec<String> = alternatives.iter()
+                        .map(|a| Self::glob_to_regex_inner(a))
+                        .collect();
+                    let joined = alt_regex.join("|");
+                    
+                    match op {
+                        '@' => result.push_str(&format!("(?:{})", joined)),
+                        '*' => result.push_str(&format!("(?:{})*", joined)),
+                        '+' => result.push_str(&format!("(?:{})+", joined)),
+                        '?' => result.push_str(&format!("(?:{})?", joined)),
+                        '!' => result.push_str(&format!("(?!{}).", joined)),
+                        _ => {}
+                    }
+                }
+                '[' => {
+                    let mut class = String::new();
+                    class.push('[');
+                    while let Some(ic) = chars.next() {
+                        class.push(ic);
+                        if ic == ']' {
+                            break;
+                        }
+                    }
+                    result.push_str(&Self::glob_to_regex(&class));
+                }
+                _ => {
+                    result.push_str(&Self::glob_char_to_regex(c));
+                }
+            }
+        }
+        
+        result
+    }
+
+    /// Convert glob pattern to regex (without ^$ anchors, for use in extglob alternatives)
+    fn glob_to_regex_inner(pattern: &str) -> String {
+        let mut result = String::new();
+        for c in pattern.chars() {
+            result.push_str(&Self::glob_char_to_regex(c));
+        }
+        result
+    }
+
+    /// Convert a single glob character to regex
+    fn glob_char_to_regex(c: char) -> String {
+        match c {
+            '*' => ".*".to_string(),
+            '?' => ".".to_string(),
+            '.' | '+' | '^' | '$' | '(' | ')' | '{' | '}' | '|' | '\\' => format!("\\{}", c),
+            _ => c.to_string(),
+        }
+    }
+
+    /// Convert glob pattern to regex (basic glob: *, ?, [...])
+    fn glob_to_regex(pattern: &str) -> String {
+        let mut result = String::new();
+        for c in pattern.chars() {
+            result.push_str(&Self::glob_char_to_regex(c));
+        }
+        format!("^{}$", result)
+    }
+
     /// Runs `src` (raw source text captured from `$(...)`/backticks) as a
     /// nested script and returns its stdout with trailing newlines trimmed.
-    fn run_command_subst(&self, src: &str) -> String {
+    fn run_command_subst(&mut self, src: &str) -> String {
         let tokens = crate::parser::lexer::tokenize(src);
         let list = crate::parser::parser::parse(tokens);
         // Reuse the current process env/shell vars by spawning through the
@@ -655,7 +1542,7 @@ export PATH=$PATH:/usr/local/bin
     /// `ExpandedPipeline` ready for the executor. `heredoc_body` is attached
     /// to whichever command declared a heredoc redirect, if any.
     pub fn expand_pipeline(
-        &self,
+        &mut self,
         pipeline: &crate::parser::Pipeline,
         heredoc_body: Option<&str>,
     ) -> crate::parser::ExpandedPipeline {
@@ -690,13 +1577,50 @@ export PATH=$PATH:/usr/local/bin
                     fd: r.fd,
                     append: r.append,
                     target: match &r.target {
-                        RedirectTarget::File(p) => RedirectTarget::File(self.expand_str(p)),
+                        RedirectTarget::File(p) => {
+                            let expanded = self.expand_str(p);
+                            // Re-check after expansion: `>$FD` where FD="&1" or FD="&-"
+                            // should be treated as an fd redirect, not a file path.
+                            if let Some(stripped) = expanded.strip_prefix('&') {
+                                if stripped == "-" {
+                                    RedirectTarget::Close(0)
+                                } else if let Ok(n) = stripped.parse::<i32>() {
+                                    RedirectTarget::Fd(n)
+                                } else {
+                                    RedirectTarget::File(expanded)
+                                }
+                            } else {
+                                RedirectTarget::File(expanded)
+                            }
+                        }
                         RedirectTarget::Fd(n) => RedirectTarget::Fd(*n),
                         RedirectTarget::Heredoc(d, strip) => RedirectTarget::Heredoc(d.clone(), *strip),
                         RedirectTarget::HereString(s) => {
                             RedirectTarget::HereString(self.expand_str(s))
                         }
+                        RedirectTarget::ProcessSubst(cmd, is_input) => {
+                            RedirectTarget::ProcessSubst(self.expand_str(cmd), *is_input)
+                        }
+                        RedirectTarget::Close(_) => RedirectTarget::Close(0),
+                        RedirectTarget::Dynamic(name) => RedirectTarget::Dynamic(name.clone()),
+                        RedirectTarget::LazyWord(segs) => {
+                            // Fully expand the word segments and re-classify
+                            let word = Word { segments: segs.clone(), quoted: false };
+                            let expanded = self.expand_word_single(&word);
+                            if let Some(stripped) = expanded.strip_prefix('&') {
+                                if stripped == "-" {
+                                    RedirectTarget::Close(0)
+                                } else if let Ok(n) = stripped.parse::<i32>() {
+                                    RedirectTarget::Fd(n)
+                                } else {
+                                    RedirectTarget::File(expanded)
+                                }
+                            } else {
+                                RedirectTarget::File(expanded)
+                            }
+                        }
                     },
+                    dyn_var: r.dyn_var.clone(),
                 })
                 .collect();
 
@@ -881,6 +1805,30 @@ export PATH=$PATH:/usr/local/bin
 
         self.cached_os_logo = Some(logo.clone());
         logo
+    }
+
+    fn render_rprompt(&mut self) -> Option<String> {
+        let mut parts = Vec::new();
+
+        if self.last_exit_status != 0 {
+            parts.push(format!("✘ {} ", self.last_exit_status));
+        }
+
+        if self.is_ssh() {
+            let user = env::var("USER").unwrap_or_else(|_| "user".to_string());
+            let host = env::var("HOSTNAME").unwrap_or_else(|_| "host".to_string());
+            parts.push(format!("{}@{} 🔐 ", user.bold().magenta(), host.bold().cyan()));
+        }
+
+        if let Some(branch) = self.get_git_branch() {
+            parts.push(format!(" {} ", branch.green()));
+        }
+
+        if !parts.is_empty() {
+            Some(parts.join(""))
+        } else {
+            None
+        }
     }
 
     pub fn render_prompt(&mut self) -> String {

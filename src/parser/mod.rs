@@ -65,6 +65,8 @@ pub enum ListOp {
 pub struct AndOrList {
     pub pipeline: Pipeline,
     pub background: bool,
+    /// True when prefixed with `!` (negation operator).
+    pub negated: bool,
 }
 
 /// A full parsed line: a sequence of pipelines joined by `;`, `&&`, `||`.

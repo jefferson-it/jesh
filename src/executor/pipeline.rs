@@ -106,6 +106,35 @@ fn spawn_one(
                 Some(body) => string_to_stdio(body).unwrap_or_else(Stdio::inherit),
                 None => Stdio::inherit(),
             },
+            RedirectTarget::ProcessSubst(cmd, is_input) => {
+                use std::process::{Command, Stdio};
+                if *is_input {
+                    {
+                        let mut __cmd = Command::new("sh");
+                        __cmd.arg("-c").arg(cmd).stdout(Stdio::piped()).stderr(Stdio::null());
+                        if let Ok(mut c) = __cmd.spawn() {
+                            match c.stdout { Some(o) => Stdio::from(o), None => Stdio::inherit() }
+                        } else {
+                            Stdio::inherit()
+                        }
+                    }
+                } else {
+                    Stdio::inherit()
+                }
+            },
+            RedirectTarget::Close(fd) => {
+                if *fd == 0 {
+                    // Closing stdin = pipe from /dev/null
+                    Stdio::null()
+                } else {
+                    Stdio::inherit()
+                }
+            }
+            RedirectTarget::Dynamic(_) | RedirectTarget::LazyWord(_) => {
+                // Dynamic FD allocation: not applicable to stdin.
+                // LazyWord should have been resolved during expand_pipeline.
+                Stdio::inherit()
+            }
         }
     } else if let Some(s) = next_stdin.take() {
         s
@@ -119,6 +148,33 @@ fn spawn_one(
         match &r.target {
             RedirectTarget::File(p) => (Stdio::from(open_output_file(p, r.append)), None),
             RedirectTarget::Fd(fd) => (dup_fd(*fd, true), None),
+            RedirectTarget::ProcessSubst(cmd, is_input) => {
+                use std::process::{Command, Stdio};
+                let stdio = if !*is_input {
+                    let mut __cmd = Command::new("sh");
+                    __cmd.arg("-c").arg(cmd).stdin(Stdio::piped()).stderr(Stdio::null());
+                    if let Ok(mut c) = __cmd.spawn() {
+                        match c.stdin { Some(o) => Stdio::from(o), None => Stdio::inherit() }
+                    } else {
+                        Stdio::inherit()
+                    }
+                } else {
+                    Stdio::inherit()
+                };
+                (stdio, None)
+            }
+            RedirectTarget::Close(fd) => {
+                if *fd == 1 || *fd == 0 {
+                    // Closing stdout = route to /dev/null
+                    (Stdio::null(), None)
+                } else {
+                    (Stdio::inherit(), None)
+                }
+            }
+            RedirectTarget::Dynamic(_) | RedirectTarget::LazyWord(_) => {
+                // Should have been resolved during expand_pipeline.
+                (Stdio::inherit(), None)
+            }
             _ => (Stdio::inherit(), None),
         }
     } else if piped {
@@ -162,6 +218,29 @@ fn spawn_one(
                     dup_fd(*target_fd, true)
                 }
             }
+            RedirectTarget::ProcessSubst(cmd, is_input) => {
+                use std::process::{Command, Stdio};
+                let stdio = if !*is_input {
+                    let mut __cmd = Command::new("sh");
+                    __cmd.arg("-c").arg(cmd).stdin(Stdio::piped()).stderr(Stdio::null());
+                    if let Ok(mut c) = __cmd.spawn() {
+                        match c.stdin { Some(o) => Stdio::from(o), None => Stdio::inherit() }
+                    } else {
+                        Stdio::inherit()
+                    }
+                } else {
+                    Stdio::inherit()
+                };
+                stdio
+            }
+            RedirectTarget::Close(fd) => {
+                if *fd == 2 || *fd == 0 {
+                    // Closing stderr = route to /dev/null
+                    Stdio::null()
+                } else {
+                    Stdio::inherit()
+                }
+            }
             _ => Stdio::inherit(),
         }
     } else {
@@ -172,11 +251,11 @@ fn spawn_one(
     process
 }
 
-pub fn execute_with(pipe: ExpandedPipeline, state: &crate::shell::ShellState) -> i32 {
+pub fn execute_with(pipe: ExpandedPipeline, state: &crate::shell::ShellState) -> (i32, Vec<i32>) {
     let quiet = state.quiet_errors;
     let n = pipe.commands.len();
     if n == 0 {
-        return 0;
+        return (0, Vec::new());
     }
 
     let is_tty = state.is_interactive && unsafe { libc::isatty(libc::STDIN_FILENO) != 0 };
@@ -257,7 +336,7 @@ pub fn execute_with(pipe: ExpandedPipeline, state: &crate::shell::ShellState) ->
                     crate::utils::restore_shell_termios();
                     crate::utils::reset_terminal_and_flush_stdin();
                 }
-                return 127;
+                return (127, vec![127]);
             }
         }
     }
@@ -269,9 +348,13 @@ pub fn execute_with(pipe: ExpandedPipeline, state: &crate::shell::ShellState) ->
     }
 
     let mut last_status = 0;
+    let mut statuses = Vec::new();
     for mut child in children {
         match child.wait() {
-            Ok(status) => last_status = status.code().unwrap_or(0),
+            Ok(status) => {
+                last_status = status.code().unwrap_or(0);
+                statuses.push(last_status);
+            }
             Err(_) => last_status = 1,
         }
     }
@@ -288,7 +371,7 @@ pub fn execute_with(pipe: ExpandedPipeline, state: &crate::shell::ShellState) ->
         crate::utils::reset_terminal_and_flush_stdin();
     }
 
-    last_status
+    (last_status, statuses)
 }
 
 /// Spawns a pipeline in the background without waiting for it (`cmd &`).

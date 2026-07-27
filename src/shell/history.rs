@@ -20,6 +20,61 @@ pub struct HistoryEntry {
     pub exit_code: i32,
     pub count: usize,
     pub last_used: String, // ISO 8601
+    #[serde(default)]
+    pub tty: String,
+}
+
+pub fn current_tty() -> String {
+    let mut buf = [0i8; 256];
+    let ret = unsafe { libc::ttyname_r(0, buf.as_mut_ptr() as *mut _, buf.len()) };
+    if ret == 0 {
+        let cstr = unsafe { std::ffi::CStr::from_ptr(buf.as_ptr() as *const _) };
+        cstr.to_string_lossy().into_owned()
+    } else {
+        std::env::var("PTS").unwrap_or_default()
+    }
+}
+
+fn effective_history_size() -> usize {
+    if let Ok(val) = std::env::var("HISTSIZE") {
+        val.parse::<usize>().unwrap_or(100000)
+    } else {
+        100000
+    }
+}
+
+fn effective_history_file_size() -> Option<usize> {
+    if let Ok(val) = std::env::var("HISTFILESIZE") {
+        Some(val.parse::<usize>().unwrap_or(usize::MAX))
+    } else {
+        None
+    }
+}
+
+#[derive(Debug, Default)]
+struct HistControl {
+    ignoredups: bool,
+    erasedups: bool,
+    ignorespace: bool,
+}
+
+fn parse_histcontrol() -> HistControl {
+    let mut ctl = HistControl::default();
+    if let Ok(val) = std::env::var("HISTCONTROL") {
+        for part in val.split(':') {
+            match part.trim() {
+                "ignoredups" => ctl.ignoredups = true,
+                "erasedups" => ctl.erasedups = true,
+                "ignorespace" => ctl.ignorespace = true,
+                "ignoreboth" => {
+                    ctl.ignorespace = true;
+                    ctl.ignoredups = true;
+                }
+                _ => {}
+            }
+        }
+    }
+    ctl
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,28 +124,7 @@ pub struct HistoryState {
 }
 
 impl HistoryState {
-    pub fn add_or_update_entry(&mut self, cmd: &str, timestamp: &str, cwd: &str, exit_code: i32) {
-        if let Some(&idx) = self.cmd_to_idx.get(cmd) {
-            let entry = &mut self.entries[idx];
-            entry.count += 1;
-            entry.last_used = timestamp.to_string();
-            entry.exit_code = exit_code;
-            entry.cwd = cwd.to_string();
-        } else {
-            let entry = HistoryEntry {
-                command: cmd.to_string(),
-                timestamp: timestamp.to_string(),
-                cwd: cwd.to_string(),
-                exit_code,
-                count: 1,
-                last_used: timestamp.to_string(),
-            };
-            self.entries.push(entry);
-            self.cmd_to_idx.insert(cmd.to_string(), self.entries.len() - 1);
-        }
-    }
-
-    fn sync_entry_from_file(&mut self, cmd: &str, last_used: &str, cwd: &str, exit_code: i32) {
+    fn upsert_entry(&mut self, cmd: &str, last_used: &str, cwd: &str, exit_code: i32, increment_count: bool) {
         if let Some(&idx) = self.cmd_to_idx.get(cmd) {
             let entry = &mut self.entries[idx];
             if last_used > entry.last_used.as_str() {
@@ -98,18 +132,34 @@ impl HistoryState {
             }
             entry.exit_code = exit_code;
             entry.cwd = cwd.to_string();
+            if increment_count {
+                entry.count += 1;
+            }
+            let entry = self.entries.remove(idx);
+            self.entries.push(entry);
+            for i in idx..self.entries.len() {
+                self.cmd_to_idx.insert(self.entries[i].command.clone(), i);
+            }
         } else {
-            let entry = HistoryEntry {
+            self.entries.push(HistoryEntry {
                 command: cmd.to_string(),
                 timestamp: last_used.to_string(),
                 cwd: cwd.to_string(),
                 exit_code,
                 count: 1,
                 last_used: last_used.to_string(),
-            };
-            self.entries.push(entry);
+                tty: String::new(),
+            });
             self.cmd_to_idx.insert(cmd.to_string(), self.entries.len() - 1);
         }
+    }
+
+    pub fn add_or_update_entry(&mut self, cmd: &str, timestamp: &str, cwd: &str, exit_code: i32) {
+        self.upsert_entry(cmd, timestamp, cwd, exit_code, true);
+    }
+
+    fn sync_entry_from_file(&mut self, cmd: &str, last_used: &str, cwd: &str, exit_code: i32) {
+        self.upsert_entry(cmd, last_used, cwd, exit_code, false);
     }
 
     fn trim_to_size(&mut self) {
@@ -296,10 +346,29 @@ impl HistoryManager {
             }
         }
 
+        let histctrl = parse_histcontrol();
+
+        if histctrl.ignorespace && command.starts_with(' ') {
+            return;
+        }
+
+        if histctrl.erasedups {
+            if let Some(&idx) = state.cmd_to_idx.get(trimmed) {
+                state.entries.remove(idx);
+                let pairs: Vec<(String, usize)> = state.entries.iter().enumerate()
+                    .map(|(i, e)| (e.command.clone(), i)).collect();
+                state.cmd_to_idx.clear();
+                for (cmd, i) in pairs {
+                    state.cmd_to_idx.insert(cmd, i);
+                }
+            }
+        }
+
         let now = Local::now().to_rfc3339();
         let path = state.history_file_path.clone();
 
-        if state.config.ignore_duplicates {
+        let skip_dup = histctrl.ignoredups || state.config.ignore_duplicates;
+        if skip_dup {
             if let Some(last_entry) = state.entries.last() {
                 if last_entry.command == trimmed {
                     let idx = state.entries.len() - 1;
@@ -317,42 +386,66 @@ impl HistoryManager {
             }
         }
 
+        let tty = current_tty();
         state.add_or_update_entry(trimmed, &now, cwd, exit_code);
 
         if let Some(&idx) = state.cmd_to_idx.get(trimmed) {
+            state.entries[idx].tty = tty.clone();
             if let Err(e) = append_entry_to_file(&path, &state.entries[idx]) {
                 eprintln!("jesh: erro ao salvar histórico: {}", e);
             }
         }
 
-        state.trim_to_size();
-    }
-
-    pub fn get_suggestion(&self, query: &str, current_dir: &str) -> Option<String> {
-        let mut state = self.state.lock().unwrap();
-        let _ = state.sync_history();
-
-        let total = state.entries.len();
-        if total == 0 || query.is_empty() {
-            return None;
-        }
-
-        let mut best_score = -1.0;
-        let mut best_cmd = None;
-
-        for (idx, entry) in state.entries.iter().enumerate().rev() {
-            if entry.command.starts_with(query) && entry.command != query {
-                let recency_score = (idx + 1) as f64 / total as f64 * 100.0;
-                let dir_score = if entry.cwd == current_dir { 50.0 } else { 0.0 };
-                let score = recency_score + dir_score;
-                if score > best_score {
-                    best_score = score;
-                    best_cmd = Some(entry.command.clone());
-                }
+        // Apply $HISTSIZE
+        let max_entries = effective_history_size();
+        if state.entries.len() > max_entries {
+            let excess = state.entries.len() - max_entries;
+            state.entries.drain(0..excess);
+            let pairs: Vec<(String, usize)> = state.entries.iter().enumerate()
+                .map(|(i, e)| (e.command.clone(), i)).collect();
+            state.cmd_to_idx.clear();
+            for (cmd, i) in pairs {
+                state.cmd_to_idx.insert(cmd, i);
             }
         }
 
-        best_cmd
+        // Apply $HISTFILESIZE
+        match effective_history_file_size() {
+            Some(0) => {
+                let _ = std::fs::write(&state.history_file_path, "");
+                state.entries.clear();
+                state.cmd_to_idx.clear();
+            }
+            Some(max_file) if state.entries.len() > max_file => {
+                let excess = state.entries.len() - max_file;
+                state.entries.drain(0..excess);
+                let pairs: Vec<(String, usize)> = state.entries.iter().enumerate()
+                    .map(|(i, e)| (e.command.clone(), i)).collect();
+                state.cmd_to_idx.clear();
+                for (cmd, i) in pairs {
+                    state.cmd_to_idx.insert(cmd, i);
+                }
+                let _ = state.save_all_history();
+            }
+            _ => {}
+        }
+    }
+
+    pub fn get_suggestion(&self, query: &str, _current_dir: &str) -> Option<String> {
+        let mut state = self.state.lock().unwrap();
+        let _ = state.sync_history();
+
+        if state.entries.is_empty() || query.is_empty() {
+            return None;
+        }
+
+        for entry in state.entries.iter().rev() {
+            if entry.command.starts_with(query) {
+                return Some(entry.command.clone());
+            }
+        }
+
+        None
     }
 
     pub fn get_navigation_entries(&self, query: &str, current_dir: &str) -> Vec<String> {
@@ -448,20 +541,27 @@ impl HistoryManager {
         Ok(())
     }
 
-    pub fn print_history(&self) {
+    pub fn print_history(&self, tty_filter: Option<&str>) {
         let state = self.state.lock().unwrap();
         for (i, entry) in state.entries.iter().enumerate() {
+            if let Some(filter) = tty_filter {
+                if entry.tty != filter {
+                    continue;
+                }
+            }
             let id = i + 1;
             let status_colored = if entry.exit_code == 0 {
                 format!("\x1B[32m{}\x1B[0m", entry.exit_code)
             } else {
                 format!("\x1B[31m{}\x1B[0m", entry.exit_code)
             };
+            let tty_display = if entry.tty.is_empty() { "-" } else { &entry.tty };
             println!(
-                "{:>5} | {} | {} | {} | {}",
+                "{:>5} | {} | {} | {} | {} | {}",
                 id,
                 entry.timestamp,
                 status_colored,
+                tty_display,
                 entry.cwd,
                 entry.command
             );

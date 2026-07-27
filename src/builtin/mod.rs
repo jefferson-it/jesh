@@ -1475,9 +1475,9 @@ pub fn handle_builtin(args: &[String], state: &mut ShellState) -> Option<i32> {
                     }
                 }
                 "clear" | "rm" => {
-                    let image_ids: Vec<String> = args.iter().skip(2).collect();
-                    let cmd = if image_ids.is_empty() {
-                        "\x1b_Ga=d;\x1b\\"
+                    let image_ids: Vec<String> = args.iter().skip(2).cloned().collect();
+                    let cmd: String = if image_ids.is_empty() {
+                        "\x1b_Ga=d;\x1b\\".to_string()
                     } else {
                         let ids = image_ids.join(",");
                         format!("\x1b_Ga=d;a={};\x1b\\", ids)
