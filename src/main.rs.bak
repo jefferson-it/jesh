@@ -241,14 +241,18 @@ fn run_interactive(mut state: ShellState) {
 
     crate::utils::save_shell_termios();
 
-    let tab_mode = {
+        let tab_mode = {
         let vars = state.shell_vars.lock().unwrap();
         match vars.get("JSH_TAB_MODE").map(|s| s.as_str()) {
             Some("circular") | Some("Circular") | Some("CIRCULAR") => crate::completion::TabMode::Circular,
+            Some("hybrid") | Some("Hybrid") | Some("HYBRID") => crate::completion::TabMode::Hybrid,
             _ => crate::completion::TabMode::Interactive,
         }
     };
 
+    // Hybrid uses CompletionType::List (the default) so rustyline shows its
+    // own list alongside our enhanced interactive menu.  Only Circular mode
+    // switches to CompletionType::Circular for inline cycling.
     let completion_type = if tab_mode == crate::completion::TabMode::Circular {
         rustyline::CompletionType::Circular
     } else {
@@ -513,7 +517,7 @@ fn run_interactive(mut state: ShellState) {
                 if show_timing {
                     let elapsed = start_time.elapsed();
                     if elapsed.as_secs_f64() >= 2.0 {
-                        eprintln!("\x1B[38;5;240m(⏳ demorou {:.1}s)\x1B[0m", elapsed.as_secs_f64());
+                        eprintln!("\u{1b}[38;5;240m(\u{23f3} demorou {:.1}s)\u{1b}[0m", elapsed.as_secs_f64());
                     }
                 }
             }
@@ -545,8 +549,20 @@ fn run_script<R: BufRead>(mut state: ShellState, mut reader: R) {
     std::process::exit(state.last_exit_status);
 }
 
+fn print_version() {
+    println!("jesh (jeffutils) {}", env!("CARGO_PKG_VERSION"));
+    println!("Copyright (C) 2026 Jefferson Silva de Souza Rios.");
+    println!("Contato: jeff.silvadsouza@gmail.com");
+    println!("Licenca GPLv3+: GNU GPL versao 3 ou posterior <https://gnu.org/licenses/gpl.html>");
+    println!("Este e um software livre: voce e livre para altera-lo e redistribui-lo.");
+    println!("NAO HA QUALQUER GARANTIA, na maxima extensao permitida em lei.");
+}
+
 fn main() {
-if std::env::args().skip(1).any(|a| a == "--version" || a == "-v") { println!("jesh v{}", env!("CARGO_PKG_VERSION")); std::process::exit(0); }
+    if std::env::args().skip(1).any(|a| a == "--version" || a == "-v") {
+        print_version();
+        std::process::exit(0);
+    }
     let mut state = ShellState::new();
 
     // Sync $PWD with actual CWD before loading .jshrc or running any commands.

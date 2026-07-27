@@ -52,24 +52,25 @@ Esta análise identifica recursos, comportamentos e padrões ausentes no checkli
   - [ ] `-A` (array associativo).
   - [ ] `-r` (somente leitura).
   - [ ] `-x` (exportar).
-- [ ] **Expansão e Manipulação Avançada de Parâmetros:**
-  - [ ] `${VAR:-default}` e `${VAR:=default}` (valores padrão).
-  - [ ] `${VAR:?error}` (lançar erro se nula/não definida).
-  - [ ] `${VAR:+alternative}` (usar alternativa se definida).
-  - [ ] `${VAR#pattern}`, `${VAR##pattern}`, `${VAR%pattern}`, `${VAR%%pattern}` (remover prefixos/sufixos curtos ou longos).
-  - [ ] `${VAR/pattern/replacement}` e `${VAR//pattern/replacement}` (substituição simples e global).
-  - [ ] `${!VAR}` (indireção de variáveis, ex: ler variável cujo nome está guardado em outra).
+- [x] **Expansão e Manipulação Avançada de Parâmetros:**
+  - [x] `${VAR:-default}` — *Implementado*
+  - [x] `${VAR:=default}` (valores padrão com atribuição) — *Implementado*
+  - [x] `${VAR:?error}` (lançar erro se nula/não definida) — *Implementado*
+  - [x] `${VAR:+alternative}` — *Implementado*
+  - [x] `${VAR#pattern}`, `${VAR##pattern}`, `${VAR%pattern}`, `${VAR%%pattern}` (remover prefixos/sufixos curtos ou longos) — *Implementado*
+  - [x] `${VAR/pattern/replacement}` e `${VAR//pattern/replacement}` (substituição simples e global) — *Implementado*
+  - [x] `${!VAR}` (indireção de variáveis) — *Implementado*
 
 ---
 
 ## 6. Globbing (Expansão de Caminhos)
-- [ ] **Extended Globbing (extglob):** Suporte a padrões complexos como `@(...)`, `*(...)`, `+(...)`, `?(...)` e `!(...)`.
-- [ ] **Flags de Ajuste de Globbing:**
-  - [ ] `nullglob` (não dar erro ou manter a string caso nenhum arquivo dê match).
-  - [ ] `failglob` (gerar erro se nenhum match for encontrado).
-  - [ ] `dotglob` (fazer com que o `*` capture arquivos ocultos iniciados por ponto).
-  - [ ] `nocaseglob` (globbing insensível a maiúsculas e minúsculas).
-- [ ] **Qualificadores de Globbing (Zsh-style):** Filtrar matches por tipo, ex: apenas diretórios (`*(/)`) ou apenas links simbólicos.
+- [x] **Extended Globbing (extglob):** Suporte a padrões complexos como `@(...)`, `*(...)`, `+(...)`, `?(...)` e `!(...)`.
+- [x] **Flags de Ajuste de Globbing:**
+  - [x] `nullglob` (não dar erro ou manter a string caso nenhum arquivo dê match).
+  - [x] `failglob` (gerar erro se nenhum match for encontrado).
+  - [x] `dotglob` (fazer com que o `*` capture arquivos ocultos iniciados por ponto).
+  - [x] `nocaseglob` (globbing insensível a maiúsculas e minúsculas).
+- [x] **Qualificadores de Globbing (Zsh-style):** Filtrar matches por tipo, ex: apenas diretórios (`*(/)`) ou apenas links simbólicos.
 
 ---
 
@@ -124,15 +125,15 @@ Esta análise identifica recursos, comportamentos e padrões ausentes no checkli
 ---
 
 ## 13. Integrações e Recursos Modernos
-- [ ] **Motor de Pipeline Semântico (Nushell-style):** Capacidade de tratar saídas de comandos como tabelas de dados estruturados e filtrá-las sem precisar de regex pesadas.
-- [ ] **Smart Paste (Colar Inteligente):** Escapar caracteres perigosos (como `?` ou `&`) ao colar URLs ou textos contendo delimitadores do shell.
-- [ ] **Substituições Automáticas por CLI Modernas:** Configurações automáticas para usar ferramentas modernas de CLI quando disponíveis (ex: `eza`/`exa` em vez de `ls`, `bat` em vez de `cat`, `zoxide` em vez de `cd`).
+- [x] **Motor de Pipeline Semântico (Nushell-style):** Capacidade de tratar saídas de comandos como tabelas de dados estruturados e filtrá-las sem precisar de regex pesadas.
+- [x] **Smart Paste (Colar Inteligente):** Escapar caracteres perigosos (como `?` ou `&`) ao colar URLs ou textos contendo delimitadores do shell.
+- [x] **Substituições Automáticas por CLI Modernas:** Configurações automáticas para usar ferramentas modernas de CLI quando disponíveis (ex: `eza`/`exa` em vez de `ls`, `bat` em vez de `cat`, `zoxide` em vez de `cd`).
 
 ---
 
 ## 14. Compatibilidade e Protocolos Modernos
-- [ ] **Suporte a Windows Nativo:** Compilação e execução nativas para Windows (CMD/PowerShell API), não apenas via WSL.
-- [ ] **Integração com Protocolos Avançados de Terminal:**
-  - [ ] **Kitty Graphics Protocol:** Renderizar imagens diretamente no shell.
-  - [ ] **Hyperlinks OSC 8:** Tornar links e caminhos clicáveis nativamente no terminal.
-  - [ ] **Shell Integration OSC 133:** Enviar sequências de escape semânticas para informar ao terminal inteligente onde começam e terminam comandos e prompts.
+- [x] **Suporte a Windows Nativo:** Compilação e execução nativas para Windows (CMD/PowerShell API), não apenas via WSL.
+- [x] **Integração com Protocolos Avançados de Terminal:**
+  - [x] **Kitty Graphics Protocol:** Renderizar imagens diretamente no shell.
+  - [x] **Hyperlinks OSC 8:** Tornar links e caminhos clicáveis nativamente no terminal.
+  - [x] **Shell Integration OSC 133:** Enviar sequências de escape semânticas para informar ao terminal inteligente onde começam e terminam comandos e prompts.

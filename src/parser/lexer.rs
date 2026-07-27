@@ -503,7 +503,9 @@ impl<'a> Lexer<'a> {
 }
 
 /// Parses the body of a `${...}` expansion: either a plain `NAME` (possibly
-/// `@`/`#`/digits), or `NAME:+word` / `NAME:-word` parameter expansion.
+/// `@`/`#`/digits), or parameter expansions like `NAME:+word`, `NAME:-word`,
+/// `NAME:=word`, `NAME:?word`, `NAME#pattern`, `NAME##pattern`, `NAME%pattern`,
+/// `NAME%%pattern`, `NAME/pat/repl`, `NAME//pat/repl`, or `!NAME`.
 fn parse_brace_body(body: &str) -> WordSegment {
     if let Some(pos) = body.find(":+").filter(|&p| is_valid_param_name(&body[..p])) {
         return WordSegment::ParamOp(body[..pos].to_string(), '+', body[pos + 2..].to_string());
@@ -511,6 +513,47 @@ fn parse_brace_body(body: &str) -> WordSegment {
     if let Some(pos) = body.find(":-").filter(|&p| is_valid_param_name(&body[..p])) {
         return WordSegment::ParamOp(body[..pos].to_string(), '-', body[pos + 2..].to_string());
     }
+    if let Some(pos) = body.find(":=").filter(|&p| is_valid_param_name(&body[..p])) {
+        return WordSegment::ParamOp(body[..pos].to_string(), '=', body[pos + 2..].to_string());
+    }
+    if let Some(pos) = body.find(":?").filter(|&p| is_valid_param_name(&body[..p])) {
+        return WordSegment::ParamOp(body[..pos].to_string(), '?', body[pos + 2..].to_string());
+    }
+
+    if let Some(pos) = body.find('#').filter(|&p| is_valid_param_name(&body[..p])) {
+        let name = &body[..pos];
+        let rest = &body[pos + 1..];
+        if rest.starts_with('#') {
+            return WordSegment::ParamOp(name.to_string(), 'H', rest[1..].to_string());
+        } else {
+            return WordSegment::ParamOp(name.to_string(), '#', rest.to_string());
+        }
+    }
+
+    if let Some(pos) = body.find('%').filter(|&p| is_valid_param_name(&body[..p])) {
+        let name = &body[..pos];
+        let rest = &body[pos + 1..];
+        if rest.starts_with('%') {
+            return WordSegment::ParamOp(name.to_string(), 'P', rest[1..].to_string());
+        } else {
+            return WordSegment::ParamOp(name.to_string(), '%', rest.to_string());
+        }
+    }
+
+    if let Some(pos) = body.find('/').filter(|&p| is_valid_param_name(&body[..p])) {
+        let name = &body[..pos];
+        let rest = &body[pos + 1..];
+        if rest.starts_with('/') {
+            return WordSegment::ParamOp(name.to_string(), 'D', rest[1..].to_string());
+        } else {
+            return WordSegment::ParamOp(name.to_string(), '/', rest.to_string());
+        }
+    }
+
+    if body.starts_with('!') && is_valid_param_name(&body[1..]) {
+        return WordSegment::ParamOp(body[1..].to_string(), '!', String::new());
+    }
+
     WordSegment::VarExpand(body.to_string())
 }
 
@@ -540,8 +583,17 @@ fn flatten_literal(word: &Word) -> String {
             WordSegment::ParamOp(name, op, word) => {
                 out.push_str("${");
                 out.push_str(name);
-                out.push(':');
-                out.push(*op);
+                match op {
+                    '+' | '-' | '=' | '?' => {
+                        out.push(':');
+                        out.push(*op);
+                    }
+                    'H' => out.push_str("##"),
+                    'P' => out.push_str("%%"),
+                    'D' => out.push_str("//"),
+                    '!' => { out.push('!'); }
+                    _ => out.push(*op),
+                }
                 out.push_str(word);
                 out.push('}');
             }
