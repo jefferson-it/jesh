@@ -1,5 +1,6 @@
 # Rust
 /target
+Cargo.lock
 
 # IDE
 .idea/
@@ -28,3 +29,7 @@ docs/dist/
 # Env
 .env
 .env.*
+
+# Package files
+*.rpm
+*.deb
