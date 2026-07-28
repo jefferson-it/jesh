@@ -14,7 +14,7 @@ export default function Prompt() {
         <thead><tr><th>{t('prompt.variablesTable.variable')}</th><th>{t('prompt.variablesTable.description')}</th><th>{t('prompt.variablesTable.example')}</th></tr></thead>
         <tbody>
           <tr><td><code>PROMPT</code> / <code>PS1</code></td><td>{t('prompt.variablesTable.prompt')}</td><td><code>'%n@%m %~ %# '</code></td></tr>
-          <tr><td><code>RPROMPT</code></td><td>{t('prompt.variablesTable.rprompt')}</td><td><code>'%? %B%F{red}%*'</code></td></tr>
+          <tr><td><code>RPROMPT</code></td><td>{t('prompt.variablesTable.rprompt')}</td><td><code>{'\u0027%? %B%F{red}%*\u0027'}</code></td></tr>
           <tr><td><code>PROMPT2</code></td><td>{t('prompt.variablesTable.prompt2')}</td><td><code>{'\'> \''}</code></td></tr>
           <tr><td><code>SPROMPT</code></td><td>{t('prompt.variablesTable.sprompt')}</td><td><code>'zsh: correct %R to %r? '</code></td></tr>
         </tbody>
@@ -36,8 +36,8 @@ export default function Prompt() {
           <tr><td><code>%T</code></td><td>{t('prompt.escapeTable.T')}</td></tr>
           <tr><td><code>%t</code> / <code>%@</code></td><td>{t('prompt.escapeTable.t')}</td></tr>
           <tr><td><code>%D</code></td><td>{t('prompt.escapeTable.D')}</td></tr>
-          <tr><td><code>%F{color}</code></td><td>{t('prompt.escapeTable.F')}</td></tr>
-          <tr><td><code>%K{color}</code></td><td>{t('prompt.escapeTable.K')}</td></tr>
+          <tr><td><code>{'%F{color}'}</code></td><td>{t('prompt.escapeTable.F')}</td></tr>
+          <tr><td><code>{'%K{color}'}</code></td><td>{t('prompt.escapeTable.K')}</td></tr>
           <tr><td><code>%B</code></td><td>{t('prompt.escapeTable.B')}</td></tr>
           <tr><td><code>%b</code></td><td>{t('prompt.escapeTable.b')}</td></tr>
           <tr><td><code>%E</code></td><td>{t('prompt.escapeTable.E')}</td></tr>
