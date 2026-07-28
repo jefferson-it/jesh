@@ -1,47 +1,15 @@
 import { Link } from 'react-router-dom'
-
-const features = [
-  { icon: '🧠', title: 'Intelligent History', desc: 'JSONL persistence, real-time sync across terminals, directory-aware, history pin/unpin.' },
-  { icon: '💡', title: 'Fish-style Autosuggestions', desc: 'Ranked by frequency, recency, directory, and pinned status. Accept with → or End.' },
-  { icon: '🔍', title: 'Fuzzy Reverse Search', desc: 'Interactive Ctrl+R with substring/fuzzy matching and arrow key navigation.' },
-  { icon: '⚡', title: 'Fast Parser', desc: 'Pipes, redirects, heredocs, process substitution, arithmetic expansion, brace expansion, extglob.' },
-  { icon: '🎨', title: 'Rich Prompt', desc: 'RPROMPT, transient prompt, async git branch, theme system, Nerd Fonts, OSC 7/133.' },
-  { icon: '📋', title: 'Tab Completion', desc: 'TUI menu, fuzzy matching, programmable via complete -W/-F, flag descriptions.' },
-  { icon: '🔧', title: '30+ Builtins', desc: 'cd, pushd/popd/dirs, declare/typeset, local, readonly, getopts, read, printf, and more.' },
-  { icon: '🖥️', title: 'Terminal Protocols', desc: 'Kitty Graphics Protocol, OSC 8 hyperlinks, OSC 133 shell integration, East Asian Width.' },
-  { icon: '🔀', title: 'Bash Fallback', desc: 'Scripts with nvm, rvm and other Bash-specific features are delegated transparently.' },
-  { icon: '🌐', title: 'Cross-platform', desc: 'Linux, macOS, Windows (native, not just WSL).' },
-]
-
-const builtins = [
-  ['cd', 'Change directory'],
-  ['pushd / popd / dirs', 'Directory stack navigation'],
-  ['export / unset', 'Manage environment variables'],
-  ['alias / unalias', 'Manage command aliases'],
-  ['source / .', 'Execute script in current context'],
-  ['history', 'View and manage command history'],
-  ['set / shopt', 'Shell options (-e, -u, -x, -o pipefail, glob flags)'],
-  ['declare / typeset', 'Variable attributes (-i, -a, -A, -r, -x)'],
-  ['local / readonly', 'Local and read-only variables'],
-  ['getopts', 'Parse script options'],
-  ['eval / exec / command', 'Command execution control'],
-  ['test / [ / [[', 'Conditional expressions'],
-  ['read / printf / echo', 'Input/output'],
-  ['jobs / fg / bg / disown / kill', 'Job control'],
-  ['type / which', 'Locate commands'],
-  ['complete', 'Programmable completion'],
-]
+import { useLanguage } from '../context/LanguageContext'
 
 export function Landing() {
+  const { t } = useLanguage()
+
   return (
     <>
       <div className="crate-header">
         <div className="container">
-          <h1>jesh <span className="version">2.0.1</span></h1>
-          <div className="description">
-            A modern, fast Unix shell written in Rust. Combines POSIX/Bash compatibility with
-            intelligent features from Fish, Zsh, and Nushell.
-          </div>
+          <h1>{t('landing.title')} <span className="version">{t('crateHeader.version')}</span></h1>
+          <div className="description">{t('landing.description')}</div>
           <div className="badges">
             <img src="https://img.shields.io/github/stars/jefferson-it/jesh?style=social" alt="Stars" />
             <img src="https://img.shields.io/badge/Rust-1.84+-purple" alt="Rust" />
@@ -49,9 +17,9 @@ export function Landing() {
             <img src="https://img.shields.io/badge/platform-linux%20%7C%20macOS%20%7C%20windows-lightgrey" alt="Platform" />
           </div>
           <div className="crate-tabs">
-            <a href="/docs" className="active">📦 Crate</a>
-            <Link to="/docs/getting-started">📚 Documentation</Link>
-            <a href="https://github.com/jefferson-it/jesh">📂 Source</a>
+            <a href="/docs" className="active">{t('crateHeader.crate')}</a>
+            <Link to="/docs/getting-started">{t('crateHeader.documentation')}</Link>
+            <a href="https://github.com/jefferson-it/jesh">{t('crateHeader.source')}</a>
           </div>
         </div>
       </div>
@@ -60,12 +28,12 @@ export function Landing() {
         <div className="two-col">
           <aside className="sidebar">
             <div className="sidebar-section">
-              <h3>Quick Links</h3>
+              <h3>{t('landing.quickLinks')}</h3>
               <nav>
-                <a href="#install">Installation</a>
-                <a href="#features">Features</a>
-                <a href="#docs">Documentation</a>
-                <a href="#builtins">Builtins</a>
+                <a href="#install">{t('landing.installation.cargo')}</a>
+                <a href="#features">{t('landing.features.title')}</a>
+                <a href="#builtins">{t('landing.builtins.title')}</a>
+                <a href="#docs">{t('landing.documentation')}</a>
               </nav>
             </div>
             <div className="sidebar-section">
@@ -79,76 +47,97 @@ export function Landing() {
 
           <div className="main">
             <div className="warning-banner">
-              ⚠️ jesh is still in active development. Some Bash features may not be fully
-              supported yet. See <Link to="/docs/vs-bash">Differences vs Bash</Link> for details.
+              ⚠️ {t('landing.warning')} <Link to="/docs/vs-bash">{t('landing.seeVsBash')}</Link>
             </div>
 
-            <h2 id="install">Installation</h2>
+            <h2 id="install">{t('landing.installation.title')}</h2>
             <div className="install-block">
-              <strong>Via Cargo</strong>
+              <strong>{t('landing.installation.cargo')}</strong>
               <div className="cmd">
-                <code>cargo install jesh</code>
-                <CopyBtn text="cargo install jesh" />
+                <code>{t('landing.installation.cargoCmd')}</code>
+                <CopyBtn text={t('landing.installation.cargoCmd')} />
               </div>
             </div>
             <div className="install-block">
-              <strong>Build from source</strong>
+              <strong>{t('landing.installation.source')}</strong>
               <div className="cmd">
-                <code>git clone https://github.com/jefferson-it/jesh && cd jesh && cargo build --release</code>
-                <CopyBtn text="git clone https://github.com/jefferson-it/jesh && cd jesh && cargo build --release" />
+                <code>{t('landing.installation.sourceCmd')}</code>
+                <CopyBtn text={t('landing.installation.sourceCmd')} />
               </div>
             </div>
 
-            <h2 id="features">Features</h2>
+            <h2 id="features">{t('landing.features.title')}</h2>
             <div className="feature-grid">
-              {features.map((f, i) => (
+              {[
+                { icon: '🧠', title: 'landing.features.intelligentHistory.title', desc: 'landing.features.intelligentHistory.desc' },
+                { icon: '💡', title: 'landing.features.autosuggestions.title', desc: 'landing.features.autosuggestions.desc' },
+                { icon: '🔍', title: 'landing.features.fuzzySearch.title', desc: 'landing.features.fuzzySearch.desc' },
+                { icon: '⚡', title: 'landing.features.fastParser.title', desc: 'landing.features.fastParser.desc' },
+                { icon: '🎨', title: 'landing.features.richPrompt.title', desc: 'landing.features.richPrompt.desc' },
+                { icon: '📋', title: 'landing.features.tabCompletion.title', desc: 'landing.features.tabCompletion.desc' },
+                { icon: '🔧', title: 'landing.features.builtins.title', desc: 'landing.features.builtins.desc' },
+                { icon: '🖥️', title: 'landing.features.terminalProtocols.title', desc: 'landing.features.terminalProtocols.desc' },
+                { icon: '🔀', title: 'landing.features.bashFallback.title', desc: 'landing.features.bashFallback.desc' },
+                { icon: '🌐', title: 'landing.features.crossPlatform.title', desc: 'landing.features.crossPlatform.desc' },
+              ].map((f, i) => (
                 <div key={i} className="feature-item">
-                  <strong>{f.icon} {f.title}</strong>
-                  <span>{f.desc}</span>
+                  <strong>{f.icon} {t(f.title)}</strong>
+                  <span>{t(f.desc)}</span>
                 </div>
               ))}
             </div>
 
-            <h2 id="builtins">Builtin Commands</h2>
+            <h2 id="builtins">{t('landing.builtins.title')}</h2>
             <table>
-              <thead><tr><th>Command</th><th>Description</th></tr></thead>
+              <thead><tr><th>{t('landing.builtins.command')}</th><th>{t('landing.builtins.description')}</th></tr></thead>
               <tbody>
-                {builtins.map(([cmd, desc], i) => (
-                  <tr key={i}><td><code>{cmd}</code></td><td>{desc}</td></tr>
+                {[
+                  ['cd', 'landing.builtins.cd'],
+                  ['pushd / popd / dirs', 'landing.builtins.pushd'],
+                  ['export / unset', 'landing.builtins.export'],
+                  ['alias / unalias', 'landing.builtins.alias'],
+                  ['source / .', 'landing.builtins.source'],
+                  ['history', 'landing.builtins.history'],
+                  ['set / shopt', 'landing.builtins.set'],
+                  ['declare / typeset', 'landing.builtins.declare'],
+                  ['local / readonly', 'landing.builtins.local'],
+                  ['getopts', 'landing.builtins.getopts'],
+                  ['eval / exec / command', 'landing.builtins.eval'],
+                  ['test / [ / [[', 'landing.builtins.test'],
+                  ['read / printf / echo', 'landing.builtins.read'],
+                  ['jobs / fg / bg / disown / kill', 'landing.builtins.jobs'],
+                  ['type / which', 'landing.builtins.type'],
+                  ['complete', 'landing.builtins.complete'],
+                ].map(([cmd, descKey], i) => (
+                  <tr key={i}><td><code>{cmd}</code></td><td>{t(descKey)}</td></tr>
                 ))}
               </tbody>
             </table>
 
-            <h2 id="docs">Documentation</h2>
+            <h2 id="docs">{t('landing.documentation')}</h2>
             <div className="quick-links">
               {[
-                ['Getting Started', '/docs/getting-started'],
-                ['Configuration', '/docs/configuration'],
-                ['Builtins Reference', '/docs/builtins'],
-                ['Scripting', '/docs/scripting'],
-                ['Parser', '/docs/parser'],
-                ['Globbing', '/docs/globbing'],
-                ['Autocomplete', '/docs/autocomplete'],
-                ['Prompt', '/docs/prompt'],
-                ['Jobs & Processes', '/docs/jobs'],
-                ['History', '/docs/history'],
-                ['Vs Bash', '/docs/vs-bash'],
-                ['Examples', '/docs/examples'],
-              ].map(([label, to]) => (
-                <Link key={to} to={to}>{label}</Link>
+                ['gettingStarted.title', '/docs/getting-started'],
+                ['configuration.title', '/docs/configuration'],
+                ['builtins.title', '/docs/builtins'],
+                ['scripting.title', '/docs/scripting'],
+                ['parser.title', '/docs/parser'],
+                ['globbing.title', '/docs/globbing'],
+                ['autocomplete.title', '/docs/autocomplete'],
+                ['prompt.title', '/docs/prompt'],
+                ['jobs.title', '/docs/jobs'],
+                ['history.title', '/docs/history'],
+                ['vsBash.title', '/docs/vs-bash'],
+                ['examples.title', '/docs/examples'],
+              ].map(([labelKey, to]) => (
+                <Link key={to} to={to}>{t(labelKey)}</Link>
               ))}
             </div>
 
-            <h2>Quick Start</h2>
-            <p>Create a <code>~/.jeshrc</code> file:</p>
-            <pre><code># jesh configuration
-INIT_INFO=true
-THEME="jesh-dracula"
-
-alias ll="eza -la"
-alias gs="git status"</code></pre>
-            <p>Run <code>jesh</code> and start typing. Press <kbd>Ctrl+R</kbd> for fuzzy history search,
-            <kbd>Tab</kbd> for completions, and <kbd>→</kbd> to accept autosuggestions.</p>
+            <h2>{t('landing.quickStart.title')}</h2>
+            <p>{t('landing.quickStart.createConfig')}</p>
+            <pre><code>{t('landing.quickStart.configExample')}</code></pre>
+            <p dangerouslySetInnerHTML={{ __html: t('landing.quickStart.runJesh') }}></p>
           </div>
         </div>
       </div>
@@ -167,7 +156,5 @@ function CopyBtn({ text }: { text: string }) {
       }
     })
   }
-  return (
-    <button className="copy" onClick={copy}>Copy</button>
-  )
+  return <button className="copy" onClick={copy}>Copy</button>
 }

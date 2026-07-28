@@ -1,3 +1,5 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
 :root {
   --text: #4a3e5c;
   --text-muted: #7a7298;
@@ -207,6 +209,77 @@ img { max-width: 100%; height: auto; }
 }
 
 .theme-btn:hover { background: var(--accent-bg); }
+
+/* Language Selector */
+.language-selector {
+  position: relative;
+}
+
+.lang-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.25rem 0.5rem;
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: var(--text);
+  transition: background 0.2s;
+}
+
+.lang-btn:hover { background: var(--accent-bg); }
+
+.lang-flag { font-size: 1rem; }
+.lang-label { font-size: 0.75rem; text-transform: capitalize; }
+.lang-arrow { width: 12px; height: 12px; margin-left: 0.2rem; opacity: 0.6; }
+
+.lang-dropdown {
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  right: 0;
+  min-width: 180px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: var(--shadow-md);
+  padding: 0.25rem;
+  list-style: none;
+  z-index: 200;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-4px);
+  transition: opacity 0.15s, visibility 0.15s, transform 0.15s;
+}
+
+.language-selector:hover .lang-dropdown,
+.language-selector:focus-within .lang-dropdown {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+
+.lang-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s;
+}
+
+.lang-option:hover { background: var(--accent-bg); }
+.lang-option.active { background: var(--accent-bg); color: var(--accent); }
+.lang-option .lang-flag { font-size: 1rem; margin-right: 0.5rem; }
+.lang-check { color: var(--accent); font-weight: bold; }
 
 /* Crate header */
 .crate-header {

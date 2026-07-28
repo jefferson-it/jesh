@@ -9,7 +9,7 @@
 cargo install jesh
 
 # Build from source
-git clone https://github.com/anomalyco/jesh
+git clone https://github.com/jefferson-it/jesh
 cd jesh
 cargo build --release
 ./target/release/jesh

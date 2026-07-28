@@ -1,0 +1,222 @@
+{
+  "nav": {
+    "logo": "🐚 jesh",
+    "gettingStarted": "Getting Started",
+    "configuration": "Config",
+    "builtins": "Builtins",
+    "github": "GitHub",
+    "theme": "Theme"
+  },
+  "crateHeader": {
+    "title": "jesh",
+    "version": "2.0.1",
+    "crate": "📦 Crate",
+    "documentation": "📚 Documentation",
+    "source": "📂 Source"
+  },
+  "landing": {
+    "title": "jesh",
+    "subtitle": "A modern Unix shell written in Rust",
+    "description": "Fast, POSIX-compatible, with modern features like autocomplete, syntax highlighting, and a powerful scripting language.",
+    "getStarted": "Get Started",
+    "github": "GitHub",
+    "warning": "jesh is still in active development. Some Bash features may not be fully supported yet.",
+    "seeVsBash": "See Differences vs Bash",
+    "quickLinks": "Quick Links",
+    "documentation": "Documentation",
+    "features": {
+      "title": "Features",
+      "intelligentHistory": {
+        "title": "Intelligent History",
+        "desc": "JSONL persistence, real-time sync across terminals, directory-aware, history pin/unpin."
+      },
+      "autosuggestions": {
+        "title": "Fish-style Autosuggestions",
+        "desc": "Ranked by frequency, recency, directory, and pinned status. Accept with → or End."
+      },
+      "fuzzySearch": {
+        "title": "Fuzzy Reverse Search",
+        "desc": "Interactive Ctrl+R with substring/fuzzy matching and arrow key navigation."
+      },
+      "fastParser": {
+        "title": "Fast Parser",
+        "desc": "Pipes, redirects, heredocs, process substitution, arithmetic expansion, brace expansion, extglob."
+      },
+      "richPrompt": {
+        "title": "Rich Prompt",
+        "desc": "RPROMPT, transient prompt, async git branch, theme system, Nerd Fonts, OSC 7/133."
+      },
+      "tabCompletion": {
+        "title": "Tab Completion",
+        "desc": "TUI menu, fuzzy matching, programmable via complete -W/-F, flag descriptions."
+      },
+      "builtins": {
+        "title": "30+ Builtins",
+        "desc": "cd, pushd/popd/dirs, declare/typeset, local, readonly, getopts, read, printf, and more."
+      },
+      "terminalProtocols": {
+        "title": "Terminal Protocols",
+        "desc": "Kitty Graphics Protocol, OSC 8 hyperlinks, OSC 133 shell integration, East Asian Width."
+      },
+      "bashFallback": {
+        "title": "Bash Fallback",
+        "desc": "Scripts with nvm, rvm and other Bash-specific features are delegated transparently."
+      },
+      "crossPlatform": {
+        "title": "Cross-platform",
+        "desc": "Linux, macOS, Windows (native, not just WSL)."
+      }
+    },
+    "quickStart": {
+      "title": "Quick Start",
+      "install": "Install",
+      "run": "Run jesh",
+      "config": "Configure",
+      "createConfig": "Create a <code>~/.jeshrc</code> file:",
+      "configExample": "# jesh configuration\nINIT_INFO=true\nTHEME=\"jesh-dracula\"\n\nalias ll=\"eza -la\"\nalias gs=\"git status\"",
+      "runJesh": "Run <code>jesh</code> and start typing. Press <kbd>Ctrl+R</kbd> for fuzzy history search, <kbd>Tab</kbd> for completions, and <kbd>→</kbd> to accept autosuggestions."
+    },
+    "installation": {
+      "cargo": "Via Cargo",
+      "cargoCmd": "cargo install jesh",
+      "source": "Build from source",
+      "sourceCmd": "git clone https://github.com/jefferson-it/jesh && cd jesh && cargo build --release"
+    },
+    "builtins": {
+      "title": "Builtin Commands",
+      "command": "Command",
+      "description": "Description",
+      "cd": "Change directory",
+      "pushd": "Directory stack navigation",
+      "export": "Manage environment variables",
+      "alias": "Manage command aliases",
+      "source": "Execute script in current context",
+      "history": "View and manage command history",
+      "set": "Shell options (-e, -u, -x, -o pipefail, glob flags)",
+      "declare": "Variable attributes (-i, -a, -A, -r, -x)",
+      "local": "Local and read-only variables",
+      "getopts": "Parse script options",
+      "eval": "Command execution control",
+      "test": "Conditional expressions",
+      "read": "Input/output",
+      "jobs": "Job control",
+      "type": "Locate commands",
+      "complete": "Programmable completion"
+    }
+  },
+  "gettingStarted": {
+    "title": "Getting Started",
+    "installation": {
+      "title": "Installation",
+      "cargo": "Via Cargo",
+      "cargoCmd": "cargo install jesh",
+      "binary": "Pre-built Binary",
+      "binaryDesc": "Download from GitHub Releases",
+      "aur": "Arch Linux (AUR)",
+      "aurCmd": "yay -S jesh"
+    },
+    "firstSteps": {
+      "title": "First Steps",
+      "step1": "Start jesh by running <code>jesh</code> in your terminal",
+      "step2": "Run <code>jesh --help</code> to see available options",
+      "step3": "Configure your shell with <code>jesh --init</code> to generate config files"
+    },
+    "configuration": {
+      "title": "Configuration",
+      "desc": "jesh looks for configuration in <code>~/.config/jesh/config.toml</code>. Run <code>jesh --init</code> to generate a default configuration file."
+    }
+  },
+  "configuration": {
+    "title": "Configuration",
+    "intro": "jesh is configured via a TOML file at <code>~/.config/jesh/config.toml</code>. Run <code>jesh --init</code> to generate a default config.",
+    "sections": {
+      "general": "General Settings",
+      "prompt": "Prompt Configuration",
+      "completion": "Completion",
+      "history": "History",
+      "aliases": "Aliases",
+      "keybindings": "Key Bindings"
+    }
+  },
+  "builtins": {
+    "title": "Built-in Commands",
+    "intro": "jesh includes a comprehensive set of built-in commands for common shell operations.",
+    "categories": {
+      "navigation": "Navigation",
+      "files": "File Operations",
+      "process": "Process Control",
+      "environment": "Environment",
+      "shell": "Shell Control"
+    }
+  },
+  "scripting": {
+    "title": "Scripting",
+    "intro": "jesh features a modern scripting language with familiar syntax and powerful features.",
+    "sections": {
+      "variables": "Variables & Types",
+      "controlFlow": "Control Flow",
+      "functions": "Functions",
+      "errorHandling": "Error Handling",
+      "modules": "Modules"
+    }
+  },
+  "parser": {
+    "title": "Parser",
+    "intro": "jesh uses a hand-written recursive descent parser for fast, accurate parsing of shell syntax."
+  },
+  "globbing": {
+    "title": "Globbing",
+    "intro": "Extended globbing patterns with support for **, @(), +(), ?(), and more."
+  },
+  "autocomplete": {
+    "title": "Autocomplete",
+    "intro": "Smart tab completion for commands, files, variables, and custom completions."
+  },
+  "prompt": {
+    "title": "Prompt",
+    "intro": "Highly customizable prompt with support for git status, exit codes, and custom modules."
+  },
+  "jobs": {
+    "title": "Jobs & Processes",
+    "intro": "Full job control with fg, bg, jobs, and process management built-in."
+  },
+  "history": {
+    "title": "History",
+    "intro": "Persistent command history with search, timestamps, and synchronization."
+  },
+  "vsBash": {
+    "title": "jesh vs Bash",
+    "intro": "Comparison of jesh features vs traditional Bash.",
+    "comparison": {
+      "feature": "Feature",
+      "bash": "Bash",
+      "jesh": "jesh"
+    }
+  },
+  "examples": {
+    "title": "Examples",
+    "intro": "Practical examples of jesh in action.",
+    "categories": {
+      "basics": "Basics",
+      "scripting": "Scripting",
+      "advanced": "Advanced"
+    }
+  },
+  "footer": {
+    "version": "jesh 2.0.1",
+    "builtWith": "Built with Rust",
+    "github": "GitHub",
+    "license": "MIT License"
+  },
+  "language": {
+    "select": "Language",
+    "en": "English",
+    "ptBR": "Português (Brasil)",
+    "ptPT": "Português (Portugal)"
+  },
+  "theme": {
+    "light": "Light",
+    "dark": "Dark",
+    "toggle": "Toggle theme"
+  }
+}

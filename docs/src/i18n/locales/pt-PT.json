@@ -1,0 +1,222 @@
+{
+  "nav": {
+    "logo": "🐚 jesh",
+    "gettingStarted": "Iniciar",
+    "configuration": "Config",
+    "builtins": "Builtins",
+    "github": "GitHub",
+    "theme": "Tema"
+  },
+  "crateHeader": {
+    "title": "jesh",
+    "version": "2.0.1",
+    "crate": "📦 Crate",
+    "documentation": "📚 Documentação",
+    "source": "📂 Código Fonte"
+  },
+  "landing": {
+    "title": "jesh",
+    "subtitle": "Uma shell Unix moderna escrita em Rust",
+    "description": "Rápida, compatível com POSIX, com funcionalidades modernas como autocomplete, syntax highlighting e uma linguagem de script poderosa.",
+    "getStarted": "Começar",
+    "github": "GitHub",
+    "warning": "O jesh ainda está em desenvolvimento ativo. Algumas funcionalidades do Bash podem não ser totalmente suportadas ainda. Veja",
+    "seeVsBash": "Diferenças vs Bash",
+    "documentation": "Documentação",
+    "quickLinks": "Links Rápidos",
+    "features": {
+      "title": "Funcionalidades",
+      "intelligentHistory": {
+        "title": "Histórico Inteligente",
+        "desc": "Persistência JSONL, sincronização em tempo real entre terminais, sensível a diretórios, fixar/desfixar histórico."
+      },
+      "autosuggestions": {
+        "title": "Autossugestões estilo Fish",
+        "desc": "Classificado por frequência, recência, diretório e estado fixado. Aceite com → ou End."
+      },
+      "fuzzySearch": {
+        "title": "Busca Reversa Fuzzy",
+        "desc": "Ctrl+R interativo com correspondência substring/fuzzy e navegação por teclas de seta."
+      },
+      "fastParser": {
+        "title": "Parser Rápido",
+        "desc": "Pipes, redirecionamentos, heredocs, substituição de processo, expansão aritmética, expansão de chaves, extglob."
+      },
+      "richPrompt": {
+        "title": "Prompt Rico",
+        "desc": "RPROMPT, prompt transitório, branch git assíncrono, sistema de temas, Nerd Fonts, OSC 7/133."
+      },
+      "tabCompletion": {
+        "title": "Complementação por Tab",
+        "desc": "Menu TUI, correspondência fuzzy, programável via complete -W/-F, descrições de flags."
+      },
+      "builtins": {
+        "title": "30+ Builtins",
+        "desc": "cd, pushd/popd/dirs, declare/typeset, local, readonly, getopts, read, printf, e mais."
+      },
+      "terminalProtocols": {
+        "title": "Protocolos de Terminal",
+        "desc": "Kitty Graphics Protocol, OSC 8 hyperlinks, OSC 133 integração shell, Largura Asiática Oriental."
+      },
+      "bashFallback": {
+        "title": "Fallback Bash",
+        "desc": "Scripts com nvm, rvm e outras funcionalidades específicas do Bash são delegados transparentemente."
+      },
+      "crossPlatform": {
+        "title": "Multiplataforma",
+        "desc": "Linux, macOS, Windows (nativo, não apenas WSL)."
+      }
+    },
+    "quickStart": {
+      "title": "Início Rápido",
+      "install": "Instalar",
+      "run": "Executar jesh",
+      "config": "Configurar",
+      "createConfig": "Crie um ficheiro <code>~/.jeshrc</code>:",
+      "configExample": "# configuração do jesh\nINIT_INFO=true\nTHEME=\"jesh-dracula\"\n\nalias ll=\"eza -la\"\nalias gs=\"git status\"",
+      "runJesh": "Execute <code>jesh</code> e comece a digitar. Pressione <kbd>Ctrl+R</kbd> para busca fuzzy no histórico, <kbd>Tab</kbd> para complementações, e <kbd>→</kbd> para aceitar autossugestões."
+    },
+    "installation": {
+      "cargo": "Via Cargo",
+      "cargoCmd": "cargo install jesh",
+      "source": "Compilar da fonte",
+      "sourceCmd": "git clone https://github.com/jefferson-it/jesh && cd jesh && cargo build --release"
+    },
+    "builtins": {
+      "title": "Comandos Internos",
+      "command": "Comando",
+      "description": "Descrição",
+      "cd": "Mudar diretório",
+      "pushd": "Navegação da pilha de diretórios",
+      "export": "Gerenciar variáveis de ambiente",
+      "alias": "Gerenciar aliases de comandos",
+      "source": "Executar script no contexto atual",
+      "history": "Ver e gerenciar histórico de comandos",
+      "set": "Opções da shell (-e, -u, -x, -o pipefail, flags de glob)",
+      "declare": "Atributos de variável (-i, -a, -A, -r, -x)",
+      "local": "Variáveis locais e somente leitura",
+      "getopts": "Analisar opções de script",
+      "eval": "Controlo de execução de comando",
+      "test": "Expressões condicionais",
+      "read": "Entrada/saída",
+      "jobs": "Controlo de jobs",
+      "type": "Localizar comandos",
+      "complete": "Complementação programável"
+    }
+  },
+  "gettingStarted": {
+    "title": "Iniciar",
+    "installation": {
+      "title": "Instalação",
+      "cargo": "Via Cargo",
+      "cargoCmd": "cargo install jesh",
+      "binary": "Binário Pré-compilado",
+      "binaryDesc": "Descarregar do GitHub Releases",
+      "aur": "Arch Linux (AUR)",
+      "aurCmd": "yay -S jesh"
+    },
+    "firstSteps": {
+      "title": "Primeiros Passos",
+      "step1": "Inicie o jesh executando <code>jesh</code> no terminal",
+      "step2": "Execute <code>jesh --help</code> para ver as opções disponíveis",
+      "step3": "Configure a sua shell com <code>jesh --init</code> para gerar ficheiros de configuração"
+    },
+    "configuration": {
+      "title": "Configuração",
+      "desc": "O jesh procura configuração em <code>~/.config/jesh/config.toml</code>. Execute <code>jesh --init</code> para gerar um ficheiro de configuração padrão."
+    }
+  },
+  "configuration": {
+    "title": "Configuração",
+    "intro": "O jesh é configurado via ficheiro TOML em <code>~/.config/jesh/config.toml</code>. Execute <code>jesh --init</code> para gerar uma configuração padrão.",
+    "sections": {
+      "general": "Configurações Gerais",
+      "prompt": "Configuração do Prompt",
+      "completion": "Complementação",
+      "history": "Histórico",
+      "aliases": "Aliases",
+      "keybindings": "Atalhos de Teclado"
+    }
+  },
+  "builtins": {
+    "title": "Comandos Internos",
+    "intro": "O jesh inclui um conjunto abrangente de comandos internos para operações comuns de shell.",
+    "categories": {
+      "navigation": "Navegação",
+      "files": "Operações de Ficheiro",
+      "process": "Controlo de Processos",
+      "environment": "Ambiente",
+      "shell": "Controlo da Shell"
+    }
+  },
+  "scripting": {
+    "title": "Scripting",
+    "intro": "O jesh possui uma linguagem de script moderna com sintaxe familiar e recursos poderosos.",
+    "sections": {
+      "variables": "Variáveis e Tipos",
+      "controlFlow": "Fluxo de Controlo",
+      "functions": "Funções",
+      "errorHandling": "Tratamento de Erros",
+      "modules": "Módulos"
+    }
+  },
+  "parser": {
+    "title": "Parser",
+    "intro": "O jesh usa um parser recursivo descendente escrito à mão para parsing rápido e preciso da sintaxe de shell."
+  },
+  "globbing": {
+    "title": "Globbing",
+    "intro": "Padrões de globbing estendidos com suporte para **, @(), +(), ?(), e mais."
+  },
+  "autocomplete": {
+    "title": "Autocomplete",
+    "intro": "Complementação inteligente por tab para comandos, ficheiros, variáveis e complementações personalizadas."
+  },
+  "prompt": {
+    "title": "Prompt",
+    "intro": "Prompt altamente personalizável com suporte a estado git, códigos de saída e módulos personalizados."
+  },
+  "jobs": {
+    "title": "Jobs e Processos",
+    "intro": "Controlo completo de jobs com fg, bg, jobs e gestão de processos integrada."
+  },
+  "history": {
+    "title": "Histórico",
+    "intro": "Histórico de comandos persistente com busca, timestamps e sincronização."
+  },
+  "vsBash": {
+    "title": "jesh vs Bash",
+    "intro": "Comparação de funcionalidades do jesh vs Bash tradicional.",
+    "comparison": {
+      "feature": "Funcionalidade",
+      "bash": "Bash",
+      "jesh": "jesh"
+    }
+  },
+  "examples": {
+    "title": "Exemplos",
+    "intro": "Exemplos práticos do jesh em ação.",
+    "categories": {
+      "basics": "Básico",
+      "scripting": "Scripting",
+      "advanced": "Avançado"
+    }
+  },
+  "footer": {
+    "version": "jesh 2.0.1",
+    "builtWith": "Construído com Rust",
+    "github": "GitHub",
+    "license": "Licença MIT"
+  },
+  "language": {
+    "select": "Idioma",
+    "en": "English",
+    "ptBR": "Português (Brasil)",
+    "ptPT": "Português (Portugal)"
+  },
+  "theme": {
+    "light": "Claro",
+    "dark": "Escuro",
+    "toggle": "Alternar tema"
+  }
+}
