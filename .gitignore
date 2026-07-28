@@ -1,6 +1,5 @@
 # Rust
 /target
-Cargo.lock
 
 # IDE
 .idea/
@@ -18,3 +17,11 @@ Thumbs.db
 
 # Jesh user data
 .jesh_history
+
+# Website (docs/)
+docs/node_modules/
+docs/dist/
+
+# Env
+.env
+.env.*
