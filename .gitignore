@@ -22,6 +22,9 @@ Thumbs.db
 docs/node_modules/
 docs/dist/
 
+# Releases
+/release/
+
 # Env
 .env
 .env.*
