@@ -188,7 +188,10 @@ impl CompletionDb {
     }
 
     fn import_bash_dir(&self, dir: &PathBuf) -> io::Result<()> {
-        let Ok(entries) = fs::read_dir(dir) else { return Ok(()) };
+        let entries = match fs::read_dir(dir) {
+            Ok(e) => e,
+            Err(_) => return Ok(()),
+        };
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {

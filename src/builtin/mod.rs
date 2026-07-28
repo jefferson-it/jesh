@@ -1614,11 +1614,10 @@ fn unary_op_test(op: &str, arg: &str) -> i32 {
     }
 }
 
-fn binary_test(op: &str, arg: &str) -> i32 {
+fn binary_test(op: &str, arg1: &str, arg2: &str) -> i32 {
     // Binary operators: -nt, -ot, -ef, =, !=, -eq, -ne, -lt, -le, -gt, -ge
     match op {
         "-nt" => {
-            // file1 newer than file2 (not implemented)
             eprintln!("test: {}: binary operator not implemented", op);
             2
         }
@@ -1630,14 +1629,14 @@ fn binary_test(op: &str, arg: &str) -> i32 {
             eprintln!("test: {}: binary operator not implemented", op);
             2
         }
-        "=" | "==" => if arg == arg { 0 } else { 1 }, // placeholder, needs two args
-        "!=" => if arg != arg { 0 } else { 1 },
-        "-eq" => arg.parse::<i64>().map(|n| if n == 0 { 0 } else { 1 }).unwrap_or(2),
-        "-ne" => arg.parse::<i64>().map(|n| if n != 0 { 0 } else { 1 }).unwrap_or(2),
-        "-lt" => arg.parse::<i64>().map(|n| if n < 0 { 0 } else { 1 }).unwrap_or(2),
-        "-le" => arg.parse::<i64>().map(|n| if n <= 0 { 0 } else { 1 }).unwrap_or(2),
-        "-gt" => arg.parse::<i64>().map(|n| if n > 0 { 0 } else { 1 }).unwrap_or(2),
-        "-ge" => arg.parse::<i64>().map(|n| if n >= 0 { 0 } else { 1 }).unwrap_or(2),
+        "=" | "==" => if arg1 == arg2 { 0 } else { 1 },
+        "!=" => if arg1 != arg2 { 0 } else { 1 },
+        "-eq" => arg1.parse::<i64>().and_then(|n| arg2.parse::<i64>().map(|m| if n == m { 0 } else { 1 })).unwrap_or(2),
+        "-ne" => arg1.parse::<i64>().and_then(|n| arg2.parse::<i64>().map(|m| if n != m { 0 } else { 1 })).unwrap_or(2),
+        "-lt" => arg1.parse::<i64>().and_then(|n| arg2.parse::<i64>().map(|m| if n < m { 0 } else { 1 })).unwrap_or(2),
+        "-le" => arg1.parse::<i64>().and_then(|n| arg2.parse::<i64>().map(|m| if n <= m { 0 } else { 1 })).unwrap_or(2),
+        "-gt" => arg1.parse::<i64>().and_then(|n| arg2.parse::<i64>().map(|m| if n > m { 0 } else { 1 })).unwrap_or(2),
+        "-ge" => arg1.parse::<i64>().and_then(|n| arg2.parse::<i64>().map(|m| if n >= m { 0 } else { 1 })).unwrap_or(2),
         _ => {
             eprintln!("test: {}: binary operator not recognized", op);
             2
@@ -1717,7 +1716,7 @@ fn test_eval_bracket(args: &[String]) -> i32 {
     match args.len() {
         0 => 1,
         1 => unary_test(&args[0]),
-        2 => binary_test(&args[0], &args[1]),
+        2 => binary_test(&args[0], &args[1], &args[2]),
         3 => {
             // Check for =~, !~, ==, != with pattern matching
             if args[1] == "=~" || args[1] == "!~" {

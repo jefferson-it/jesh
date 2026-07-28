@@ -33,7 +33,7 @@ fn fuzzy_score(query: &str, target: &str) -> u32 {
     let mut qi = 0;
     let mut score: u32 = 0;
     let mut consecutive: u32 = 0;
-    for (ti, tc) in t.chars().enumerate() {
+    for (ti, tc) in t.char_indices() {
         if qi < qc.len() && tc == qc[qi] {
             qi += 1;
             consecutive += 1;
