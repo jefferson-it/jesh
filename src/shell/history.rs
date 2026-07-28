@@ -295,8 +295,8 @@ impl HistoryManager {
     pub fn new() -> Self {
         let home = std::env::var("HOME").ok().map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("."));
-        let history_file_path = home.join(".bjesh-history");
-        let pins_file_path = home.join(".bjesh-pins");
+        let history_file_path = home.join(".jesh_history");
+        let pins_file_path = home.join(".jesh_pins");
 
         let state = Arc::new(Mutex::new(HistoryState {
             config: HistoryConfig::default(),
@@ -666,7 +666,7 @@ fn append_entry_to_file(path: &Path, entry: &HistoryEntry) -> io::Result<()> {
 fn load_config() -> HistoryConfig {
     let home = std::env::var("HOME").ok().map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));
-    let config_path = home.join(".config/bjesh/config.toml");
+    let config_path = home.join(".config/jesh/config.toml");
     if config_path.exists() {
         if let Ok(content) = fs::read_to_string(&config_path) {
             #[derive(Deserialize)]

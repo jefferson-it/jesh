@@ -33,6 +33,21 @@ pub fn run_command_list(
 }
 
 fn run_and_or(state: &mut ShellState, andor: &crate::parser::AndOrList, heredoc: Option<&str>) {
+    if state.xtrace {
+        let cmd_str: String = andor.pipeline.commands.iter()
+            .map(|c| {
+                let mut s = crate::parser::word_to_string(&c.program);
+                for a in &c.args {
+                    s.push(' ');
+                    s.push_str(&crate::parser::word_to_string(a));
+                }
+                s
+            })
+            .collect::<Vec<_>>()
+            .join(" | ");
+        eprintln!("+ {}", cmd_str);
+    }
+
     // Assignment-only pipeline, e.g. `FOO=bar` with no command: set the var
     // and don't spawn anything.
     let mut executed = false;
@@ -72,39 +87,52 @@ fn run_and_or(state: &mut ShellState, andor: &crate::parser::AndOrList, heredoc:
                     eprintln!("sys     0m0{}000s", sep);
                     state.last_exit_status = 0;
                 } else {
-                    // Shift arguments to strip "time"
                     let sub_program = expanded.commands[0].args[0].clone();
                     let sub_args = expanded.commands[0].args[1..].to_vec();
                     expanded.commands[0].program = sub_program;
                     expanded.commands[0].args = sub_args;
 
-                    let mut usage_before: libc::rusage = unsafe { std::mem::MaybeUninit::zeroed().assume_init() };
-                    unsafe {
-                        libc::getrusage(libc::RUSAGE_CHILDREN, &mut usage_before);
+                    #[cfg(unix)]
+                    {
+                        let mut usage_before: libc::rusage = unsafe { std::mem::MaybeUninit::zeroed().assume_init() };
+                        unsafe {
+                            libc::getrusage(libc::RUSAGE_CHILDREN, &mut usage_before);
+                        }
+                        let start_time = std::time::Instant::now();
+
+                        execute_expanded(state, expanded, andor.background);
+
+                        let elapsed = start_time.elapsed().as_secs_f64();
+                        let mut usage_after: libc::rusage = unsafe { std::mem::MaybeUninit::zeroed().assume_init() };
+                        unsafe {
+                            libc::getrusage(libc::RUSAGE_CHILDREN, &mut usage_after);
+                        }
+
+                        let user_time = (usage_after.ru_utime.tv_sec - usage_before.ru_utime.tv_sec) as f64
+                            + (usage_after.ru_utime.tv_usec - usage_before.ru_utime.tv_usec) as f64 / 1_000_000.0;
+                        let sys_time = (usage_after.ru_stime.tv_sec - usage_before.ru_stime.tv_sec) as f64
+                            + (usage_after.ru_stime.tv_usec - usage_before.ru_stime.tv_usec) as f64 / 1_000_000.0;
+
+                        eprintln!("real    {}", format_time(elapsed));
+                        eprintln!("user    {}", format_time(user_time));
+                        eprintln!("sys     {}", format_time(sys_time));
                     }
-                    let start_time = std::time::Instant::now();
-
-                    execute_expanded(state, expanded, andor.background);
-
-                    let elapsed = start_time.elapsed().as_secs_f64();
-                    let mut usage_after: libc::rusage = unsafe { std::mem::MaybeUninit::zeroed().assume_init() };
-                    unsafe {
-                        libc::getrusage(libc::RUSAGE_CHILDREN, &mut usage_after);
+                    #[cfg(windows)]
+                    {
+                        let start_time = std::time::Instant::now();
+                        execute_expanded(state, expanded, andor.background);
+                        let elapsed = start_time.elapsed().as_secs_f64();
+                        eprintln!("real    {}", format_time(elapsed));
                     }
-
-                    let user_time = (usage_after.ru_utime.tv_sec - usage_before.ru_utime.tv_sec) as f64
-                        + (usage_after.ru_utime.tv_usec - usage_before.ru_utime.tv_usec) as f64 / 1_000_000.0;
-                    let sys_time = (usage_after.ru_stime.tv_sec - usage_before.ru_stime.tv_sec) as f64
-                        + (usage_after.ru_stime.tv_usec - usage_before.ru_stime.tv_usec) as f64 / 1_000_000.0;
-
-                    eprintln!("real    {}", format_time(elapsed));
-                    eprintln!("user    {}", format_time(user_time));
-                    eprintln!("sys     {}", format_time(sys_time));
                 }
             } else {
                 execute_expanded(state, expanded, andor.background);
             }
         }
+    }
+
+    if state.errexit && state.last_exit_status != 0 && !andor.negated {
+        std::process::exit(state.last_exit_status);
     }
 
     // Apply `!` negation operator
@@ -114,39 +142,38 @@ fn run_and_or(state: &mut ShellState, andor: &crate::parser::AndOrList, heredoc:
 }
 
 fn execute_expanded(state: &mut ShellState, expanded: ExpandedPipeline, background: bool) {
-    // Intercept `exec` builtin command to replace current process
-    if expanded.commands.len() == 1 && expanded.commands[0].program == "exec" {
-        let cmd = &expanded.commands[0];
-        if cmd.args.is_empty() {
-            // exec with no command is used to apply redirections to the shell.
+    #[cfg(unix)]
+    {
+        if expanded.commands.len() == 1 && expanded.commands[0].program == "exec" {
+            let cmd = &expanded.commands[0];
+            if cmd.args.is_empty() {
+                apply_current_redirects(&cmd.redirects, cmd.heredoc.as_deref(), state);
+
+                state.last_exit_status = 0;
+                return;
+            }
+
             apply_current_redirects(&cmd.redirects, cmd.heredoc.as_deref(), state);
 
+            let target_cmd = &cmd.args[0];
+            let target_args = &cmd.args[1..];
 
-            state.last_exit_status = 0;
-            return;
+            use std::os::unix::process::CommandExt;
+            let mut process = std::process::Command::new(target_cmd);
+            process.args(target_args);
+            for (k, v) in &cmd.env_vars {
+                process.env(k, v);
+            }
+
+            let err = process.exec();
+            eprintln!("jesh: exec: {}: {}", target_cmd, err);
+            let exit_code = match err.kind() {
+                std::io::ErrorKind::NotFound => 127,
+                std::io::ErrorKind::PermissionDenied => 126,
+                _ => 1,
+            };
+            std::process::exit(exit_code);
         }
-
-        // Apply redirections in-process
-        apply_current_redirects(&cmd.redirects, cmd.heredoc.as_deref(), state);
-
-        let target_cmd = &cmd.args[0];
-        let target_args = &cmd.args[1..];
-
-        use std::os::unix::process::CommandExt;
-        let mut process = std::process::Command::new(target_cmd);
-        process.args(target_args);
-        for (k, v) in &cmd.env_vars {
-            process.env(k, v);
-        }
-
-        let err = process.exec();
-        eprintln!("jesh: exec: {}: {}", target_cmd, err);
-        let exit_code = match err.kind() {
-            std::io::ErrorKind::NotFound => 127,
-            std::io::ErrorKind::PermissionDenied => 126,
-            _ => 1,
-        };
-        std::process::exit(exit_code);
     }
 
     // Single command, no redirects/pipe: try builtins first (in-process).
@@ -304,6 +331,7 @@ fn format_time(seconds: f64) -> String {
     format!("{}m{}s", minutes, formatted_secs)
 }
 
+#[cfg(unix)]
 fn apply_current_redirects(redirects: &[crate::parser::lexer::Redirect], heredoc: Option<&str>, state: &mut crate::shell::ShellState) {
     use crate::parser::lexer::RedirectTarget;
     use std::os::unix::io::AsRawFd;
@@ -311,7 +339,6 @@ fn apply_current_redirects(redirects: &[crate::parser::lexer::Redirect], heredoc
     for r in redirects {
         let target_fd = r.fd;
 
-        // Handle dynamic fd allocation `{FD}>file`
         if target_fd == -2 {
             if let RedirectTarget::File(path) = &r.target {
                 let path = crate::utils::expand_target(path);
@@ -324,10 +351,8 @@ fn apply_current_redirects(redirects: &[crate::parser::lexer::Redirect], heredoc
                 }
                 if let Ok(file) = opts.open(&path) {
                     let file_fd = file.as_raw_fd();
-                    // Find next available fd >= 10
                     let new_fd = unsafe { libc::fcntl(file_fd, libc::F_DUPFD, 10) };
                     if new_fd >= 0 {
-                        // Close the original file_fd (we now have new_fd)
                         unsafe { libc::close(file_fd); }
                     }
                     if let Some(varname) = &r.dyn_var {
@@ -338,8 +363,6 @@ fn apply_current_redirects(redirects: &[crate::parser::lexer::Redirect], heredoc
                     std::process::exit(1);
                 }
             } else if let RedirectTarget::Close(_) = &r.target {
-                // `{FD}>&-` — close the dynamically allocated fd
-                // Look up the variable to find which fd to close
                 if let Some(varname) = &r.dyn_var {
                     let fd_str = state.get_var(varname);
                     if let Ok(fd_num) = fd_str.parse::<i32>() {
@@ -468,10 +491,7 @@ fn apply_current_redirects(redirects: &[crate::parser::lexer::Redirect], heredoc
                     libc::close(target_fd);
                 }
             },
-            RedirectTarget::Dynamic(_) | RedirectTarget::LazyWord(_) => {
-                // Should have been resolved during expand_pipeline.
-                // LazyWord would have been expanded, Dynamic handled above (fd=-2).
-            }
+            RedirectTarget::Dynamic(_) | RedirectTarget::LazyWord(_) => {}
         }
     }
 }

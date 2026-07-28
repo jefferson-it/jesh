@@ -40,6 +40,34 @@ impl Word {
     }
 }
 
+pub fn word_to_string(word: &Word) -> String {
+    let mut s = String::new();
+    for seg in &word.segments {
+        match seg {
+            WordSegment::Literal(t) => s.push_str(t),
+            WordSegment::VarExpand(name) => {
+                s.push('$');
+                s.push_str(name);
+            }
+            WordSegment::CommandSubst(cmd) => {
+                s.push_str("$(");
+                s.push_str(cmd);
+                s.push(')');
+            }
+            WordSegment::Tilde(t) => s.push_str(t),
+            WordSegment::ParamOp(name, op, word) => {
+                s.push_str(&format!("${{{}{}{}}}", name, op, word));
+            }
+            WordSegment::Arithmetic(expr) => {
+                s.push_str("$((");
+                s.push_str(expr);
+                s.push_str("))");
+            }
+        }
+    }
+    s
+}
+
 #[derive(Debug, Clone)]
 pub struct Command {
     pub program: Word,

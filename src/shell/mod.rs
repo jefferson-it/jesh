@@ -6,8 +6,10 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
-use crossterm::style::Stylize;
+use crossterm::style::{Color, Stylize};
+#[cfg(unix)]
 use nix::unistd::{getppid, getuid, getgroups};
+use unicode_width::UnicodeWidthStr;
 
 use crate::completion::CompletionDb;
 use crate::parser::{Word, WordSegment};
@@ -21,8 +23,16 @@ fn command_exists(name: &str) -> bool {
     env::split_paths(&path_var).any(|dir| {
         let full = dir.join(name);
         full.is_file() && full.metadata().ok().map_or(false, |m| {
-            use std::os::unix::fs::PermissionsExt;
-            m.permissions().mode() & 0o111 != 0
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                m.permissions().mode() & 0o111 != 0
+            }
+            #[cfg(windows)]
+            {
+                let _ = m;
+                true
+            }
         })
     })
 }
@@ -47,6 +57,9 @@ fn register_modern_cli_aliases(aliases: &mut HashMap<String, String>) {
     }
     if command_exists("htop") {
         aliases.insert("top".to_string(), "htop".to_string());
+    }
+    if command_exists("zoxide") {
+        aliases.insert("z".to_string(), "zoxide".to_string());
     }
 }
 
@@ -125,6 +138,11 @@ pub struct ShellState {
     pub glob_nocaseglob: bool,
     pub glob_extglob: bool,
     pub bg_jobs: Arc<Mutex<Vec<BgJob>>>,
+    pub errexit: bool,
+    pub nounset: bool,
+    pub xtrace: bool,
+    pub cached_git_branch: Arc<Mutex<Option<String>>>,
+    pub cached_prompt_time: Arc<Mutex<std::time::Instant>>,
 }
 
 #[derive(Debug, Clone)]
@@ -132,6 +150,18 @@ pub struct BgJob {
     pub pid: u32,
     pub command: String,
     pub start_time: SystemTime,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Qualifier {
+    Dir,
+    File,
+    Symlink,
+    Exec,
+    NotDir,
+    NotFile,
+    NotSymlink,
+    NotExec,
 }
 
 impl ShellState {
@@ -220,30 +250,38 @@ impl ShellState {
             glob_nocaseglob: false,
             glob_extglob: false,
             bg_jobs: Arc::new(Mutex::new(Vec::new())),
+            errexit: false,
+            nounset: false,
+            xtrace: false,
+            cached_git_branch: Arc::new(Mutex::new(None)),
+            cached_prompt_time: Arc::new(Mutex::new(std::time::Instant::now())),
         }
     }
 
     pub fn check_bg_jobs(&self) {
-        let mut jobs = self.bg_jobs.lock().unwrap();
-        let mut i = 0;
-        while i < jobs.len() {
-            let pid = jobs[i].pid as libc::pid_t;
-            let mut status: i32 = 0;
-            let ret = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
-            if ret == pid {
-                let exit_code = unsafe { libc::WEXITSTATUS(status) };
-                let cmd = &jobs[i].command;
-                let elapsed = jobs[i].start_time.elapsed().map(|d| d.as_secs_f64()).unwrap_or(0.0);
-                if exit_code == 0 {
-                    eprintln!("\r\x1B[32m[done]\x1B[0m {} ({}s)      ", cmd, elapsed);
+        #[cfg(unix)]
+        {
+            let mut jobs = self.bg_jobs.lock().unwrap();
+            let mut i = 0;
+            while i < jobs.len() {
+                let pid = jobs[i].pid as libc::pid_t;
+                let mut status: i32 = 0;
+                let ret = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+                if ret == pid {
+                    let exit_code = unsafe { libc::WEXITSTATUS(status) };
+                    let cmd = &jobs[i].command;
+                    let elapsed = jobs[i].start_time.elapsed().map(|d| d.as_secs_f64()).unwrap_or(0.0);
+                    if exit_code == 0 {
+                        eprintln!("\r\x1B[32m[done]\x1B[0m {} ({}s)      ", cmd, elapsed);
+                    } else {
+                        eprintln!("\r\x1B[31m[done]\x1B[0m {} (exit {}) ({}s)      ", cmd, exit_code, elapsed);
+                    }
+                    jobs.remove(i);
+                } else if ret == -1 {
+                    jobs.remove(i);
                 } else {
-                    eprintln!("\r\x1B[31m[done]\x1B[0m {} (exit {}) ({}s)      ", cmd, exit_code, elapsed);
+                    i += 1;
                 }
-                jobs.remove(i);
-            } else if ret == -1 {
-                jobs.remove(i);
-            } else {
-                i += 1;
             }
         }
     }
@@ -290,8 +328,9 @@ export PATH=$PATH:/usr/local/bin
         if let Ok(content) = fs::read_to_string(&jeshrc_path) {
             self.quiet_errors = true;
             self.run_script_text(&content);
-            self.quiet_errors = false;
-        }
+        self.quiet_errors = false;
+        self.load_theme();
+    }
     }
 
     /// If hot-reload is enabled (`HOT_RELOAD=true` in `.jeshrc`) and the file
@@ -558,16 +597,27 @@ export PATH=$PATH:/usr/local/bin
                 return " \t\n".to_string();
             }
             "PPID" => {
-                return getppid().to_string();
+                #[cfg(unix)]
+                { return getppid().to_string(); }
+                #[cfg(windows)]
+                { return "0".to_string(); }
             }
             "UID" => {
-                return getuid().as_raw().to_string();
+                #[cfg(unix)]
+                { return getuid().as_raw().to_string(); }
+                #[cfg(windows)]
+                { return "0".to_string(); }
             }
             "GROUPS" => {
-                if let Ok(groups) = getgroups() {
-                    return groups.iter().map(|g| g.as_raw().to_string()).collect::<Vec<_>>().join(" ");
+                #[cfg(unix)]
+                {
+                    if let Ok(groups) = getgroups() {
+                        return groups.iter().map(|g| g.as_raw().to_string()).collect::<Vec<_>>().join(" ");
+                    }
+                    return String::new();
                 }
-                return String::new();
+                #[cfg(windows)]
+                { return String::new(); }
             }
             _ if name.len() <= 2 && name.chars().all(|c| c.is_ascii_digit()) && !name.is_empty() => {
                 if let Ok(idx) = name.parse::<usize>() {
@@ -583,6 +633,16 @@ export PATH=$PATH:/usr/local/bin
         }
         if let Some(v) = self.shell_vars.lock().unwrap().get(name).cloned() {
             return v;
+        }
+        if self.nounset {
+            let env_val = env::var(name);
+            match env_val {
+                Ok(v) => return v,
+                Err(_) => {
+                    eprintln!("jesh: {}: variable not set", name);
+                    return String::new();
+                }
+            }
         }
         env::var(name).unwrap_or_default()
     }
@@ -1044,19 +1104,51 @@ export PATH=$PATH:/usr/local/bin
     }
 
     fn try_glob(&self, pattern: &str) -> Option<Vec<String>> {
-        // eprintln!("DEBUG try_glob: pattern='{}', glob_extglob={}, glob_extglob_shell={}", pattern, self.glob_extglob, std::env::var("JESH_EXTGLOB").unwrap_or_default());
+        // Check for Zsh-style glob qualifiers *(X) or *(^X) where X is / . @ *
+        let qualifier = {
+            let bytes = pattern.as_bytes();
+            let len = bytes.len();
+            if len >= 4 && bytes[len-1] == b')' {
+                if len >= 4 && &pattern[len-4..] == "*(/)" { Some((len-3, Qualifier::Dir)) }
+                else if len >= 4 && &pattern[len-4..] == "*(.)" { Some((len-3, Qualifier::File)) }
+                else if len >= 4 && &pattern[len-4..] == "*(@)" { Some((len-3, Qualifier::Symlink)) }
+                else if len >= 4 && &pattern[len-4..] == "*(*)" { Some((len-3, Qualifier::Exec)) }
+                else if len >= 5 && &pattern[len-5..] == "*(^/)" { Some((len-4, Qualifier::NotDir)) }
+                else if len >= 5 && &pattern[len-5..] == "*(^.)" { Some((len-4, Qualifier::NotFile)) }
+                else if len >= 5 && &pattern[len-5..] == "*(^@)" { Some((len-4, Qualifier::NotSymlink)) }
+                else if len >= 5 && &pattern[len-5..] == "*(^*)" { Some((len-4, Qualifier::NotExec)) }
+                else { None }
+            } else {
+                None
+            }
+        };
+
+        if let Some((end, qual)) = qualifier {
+            let inner = &pattern[..end];
+            let matches = self.try_glob(inner)?;
+            let filtered = self.filter_by_qualifier(matches, qual);
+            if filtered.is_empty() {
+                if self.glob_nullglob {
+                    return Some(vec![]);
+                }
+                if self.glob_failglob {
+                    return None;
+                }
+                return None;
+            }
+            return Some(filtered);
+        }
+
         // Check if pattern has any glob metacharacters
         let has_basic_glob = pattern.chars().any(|c| matches!(c, '*' | '?' | '['));
         let has_extglob = self.glob_extglob && pattern.contains('(') && pattern.chars().any(|c| matches!(c, '@' | '*' | '+' | '?' | '!'));
-        // eprintln!("DEBUG try_glob: has_basic_glob={}, has_extglob={}, glob_extglob={}", has_basic_glob, has_extglob, self.glob_extglob);
-        
+
         if !has_basic_glob && !has_extglob {
             return None;
         }
 
         // Use custom glob matching for extglob patterns
         if has_extglob {
-            // eprintln!("DEBUG try_glob: calling try_glob_extended");
             return self.try_glob_extended(pattern);
         }
 
@@ -1124,6 +1216,41 @@ export PATH=$PATH:/usr/local/bin
 
         results.sort();
         Some(results)
+    }
+
+    fn filter_by_qualifier(&self, results: Vec<String>, qual: Qualifier) -> Vec<String> {
+        results.into_iter().filter(|path| {
+            let metadata = match std::fs::symlink_metadata(path) {
+                Ok(m) => m,
+                Err(_) => return false,
+            };
+            match qual {
+                Qualifier::Dir => metadata.is_dir(),
+                Qualifier::File => metadata.is_file(),
+                Qualifier::Symlink => metadata.file_type().is_symlink(),
+                Qualifier::Exec => {
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        metadata.permissions().mode() & 0o111 != 0
+                    }
+                    #[cfg(not(unix))]
+                    { false }
+                }
+                Qualifier::NotDir => !metadata.is_dir(),
+                Qualifier::NotFile => !metadata.is_file(),
+                Qualifier::NotSymlink => !metadata.file_type().is_symlink(),
+                Qualifier::NotExec => {
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        metadata.permissions().mode() & 0o111 == 0
+                    }
+                    #[cfg(not(unix))]
+                    { true }
+                }
+            }
+        }).collect()
     }
 
 /// Extended glob matching for patterns like @(a|b), *(a|b), +(a|b), ?(a|b), !(a|b)
@@ -1807,60 +1934,163 @@ export PATH=$PATH:/usr/local/bin
         logo
     }
 
-    fn render_rprompt(&mut self) -> Option<String> {
-        let mut parts = Vec::new();
+    fn render_rprompt(&mut self) -> Option<(String, String)> {
+        let mut parts_styled = Vec::new();
+        let mut parts_plain = Vec::new();
 
         if self.last_exit_status != 0 {
-            parts.push(format!("✘ {} ", self.last_exit_status));
+            let colored = self.apply_theme_color(&self.last_exit_status.to_string(), "JSH_THEME_RPROMPT_ERR_COLOR");
+            parts_styled.push(format!("✘ {} ", if colored != self.last_exit_status.to_string() { colored } else { self.last_exit_status.to_string().red().to_string() }));
+            parts_plain.push(format!("✘ {} ", self.last_exit_status));
         }
 
         if self.is_ssh() {
             let user = env::var("USER").unwrap_or_else(|_| "user".to_string());
             let host = env::var("HOSTNAME").unwrap_or_else(|_| "host".to_string());
-            parts.push(format!("{}@{} 🔐 ", user.bold().magenta(), host.bold().cyan()));
+            let user_styled = self.apply_theme_color(&user, "JSH_THEME_RPROMPT_SSH_USER_COLOR");
+            let host_styled = self.apply_theme_color(&host, "JSH_THEME_RPROMPT_SSH_HOST_COLOR");
+            let user_final = if user_styled != user { user_styled } else { user.clone().bold().magenta().to_string() };
+            let host_final = if host_styled != host { host_styled } else { host.clone().bold().cyan().to_string() };
+            parts_styled.push(format!("{}@{} 🔐 ", user_final, host_final));
+            parts_plain.push(format!("{}@{} 🔐 ", user, host));
         }
 
         if let Some(branch) = self.get_git_branch() {
-            parts.push(format!(" {} ", branch.green()));
+            let styled = self.apply_theme_color(&branch, "JSH_THEME_RPROMPT_GIT_COLOR");
+            let final_branch = if styled != branch { styled } else { branch.clone().green().to_string() };
+            parts_styled.push(format!(" {} ", final_branch));
+            parts_plain.push(format!(" {} ", branch));
         }
 
-        if !parts.is_empty() {
-            Some(parts.join(""))
+        if !parts_styled.is_empty() {
+            Some((parts_styled.join(""), parts_plain.join("")))
         } else {
             None
         }
     }
 
+    fn parse_theme_color(&self, name: &str) -> Option<Color> {
+        let val = self.get_var(name);
+        if val.is_empty() {
+            return None;
+        }
+        match val.to_lowercase().as_str() {
+            "black" => Some(Color::Black),
+            "red" => Some(Color::DarkRed),
+            "green" => Some(Color::DarkGreen),
+            "yellow" => Some(Color::DarkYellow),
+            "blue" => Some(Color::DarkBlue),
+            "magenta" => Some(Color::DarkMagenta),
+            "cyan" => Some(Color::DarkCyan),
+            "white" => Some(Color::Grey),
+            "darkred" | "dark_red" => Some(Color::DarkRed),
+            "darkgreen" | "dark_green" => Some(Color::DarkGreen),
+            "darkyellow" | "dark_yellow" => Some(Color::DarkYellow),
+            "darkblue" | "dark_blue" => Some(Color::DarkBlue),
+            "darkmagenta" | "dark_magenta" => Some(Color::DarkMagenta),
+            "darkcyan" | "dark_cyan" => Some(Color::DarkCyan),
+            "grey" | "gray" => Some(Color::Grey),
+            _ => None,
+        }
+    }
+
+    fn apply_theme_color(&self, text: &str, var_name: &str) -> String {
+        if let Some(color) = self.parse_theme_color(var_name) {
+            text.with(color).to_string()
+        } else {
+            text.to_string()
+        }
+    }
+
+    pub fn load_theme(&mut self) {
+        let theme = self.get_var("THEME");
+        if theme.is_empty() {
+            return;
+        }
+        let home = env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+        let data_home = env::var("XDG_DATA_HOME").unwrap_or_else(|_| format!("{}/.local/share", home));
+        let search_dirs = [
+            PathBuf::from(&data_home).join("jesh/themes"),
+            PathBuf::from(&home).join(".local/jesh/themes"),
+        ];
+        for dir in &search_dirs {
+            let theme_file = dir.join(format!("{}.sh", theme));
+            if theme_file.exists() {
+                if let Ok(content) = fs::read_to_string(&theme_file) {
+                    let script = format!("JSH_THEME_LOADED=1\n{}", content);
+                    self.run_script_text(&script);
+                }
+                return;
+            }
+        }
+    }
+
+    fn format_prompt_with_rprompt(&mut self, prompt: &str, rprompt_styled: Option<&str>) -> String {
+        if let Some(rp) = rprompt_styled {
+            let cols = crossterm::terminal::size().map(|(w, _)| w).unwrap_or(80) as usize;
+            let rp_plain = crate::utils::strip_ansi(rp);
+            let rp_width = UnicodeWidthStr::width(rp_plain.as_str());
+            let prompt_width = UnicodeWidthStr::width(prompt);
+            let gap = if prompt_width + rp_width < cols { cols - prompt_width - rp_width } else { 1 };
+            format!("{}{}{}", prompt, " ".repeat(gap), rp)
+        } else {
+            prompt.to_string()
+        }
+    }
+
     pub fn render_prompt(&mut self) -> String {
         crate::utils::emit_osc7();
+
+        let err_color = |s: &str| -> String {
+            let c = self.apply_theme_color(s, "JSH_THEME_STATUS_ERR_COLOR");
+            if c != s { c } else { s.red().to_string() }
+        };
+
         let status_part = if self.last_exit_status == 0 {
             "".to_string()
         } else {
-            format!("{} {} ", "✘".bold().red(), self.last_exit_status.to_string().red())
+            format!("✘{} ", err_color(&self.last_exit_status.to_string()))
         };
 
         let ssh_part = if self.is_ssh() {
             let user = env::var("USER").unwrap_or_else(|_| "user".to_string());
             let host = env::var("HOSTNAME").unwrap_or_else(|_| "host".to_string());
-            format!("{}@{} 🔐 ", user.bold().magenta(), host.bold().cyan())
+            let user_styled = self.apply_theme_color(&user, "JSH_THEME_SSH_USER_COLOR");
+            let host_styled = self.apply_theme_color(&host, "JSH_THEME_SSH_HOST_COLOR");
+            let u = if user_styled != user { user_styled } else { user.bold().magenta().to_string() };
+            let h = if host_styled != host { host_styled } else { host.bold().cyan().to_string() };
+            format!("{}@{} 🔐 ", u, h)
         } else {
             "".to_string()
         };
 
-        let git_part = match self.get_git_branch() {
-            Some(branch) => format!(" {}", branch.green()),
+        let git_part = match self.cached_git_branch.lock().unwrap().clone() {
+            Some(branch) => {
+                let styled = self.apply_theme_color(&branch, "JSH_THEME_GIT_COLOR");
+                let b = if styled != branch { styled } else { branch.green().to_string() };
+                format!(" {} ", b)
+            }
             None => "".to_string(),
         };
 
-        format!(
+        let dir_styled = self.apply_theme_color(&self.get_current_dir_short(), "JSH_THEME_DIR_COLOR");
+        let dir_final = if dir_styled != self.get_current_dir_short() { dir_styled } else { self.get_current_dir_short().bold().magenta().to_string() };
+
+        let prompt_styled = self.apply_theme_color(">", "JSH_THEME_PROMPT_COLOR");
+        let prompt_final = if prompt_styled != ">" { prompt_styled } else { ">".magenta().to_string() };
+
+        let base = format!(
             "{}{}{} {} {} {} ",
             status_part,
             ssh_part,
             self.os_logo(),
-            self.get_current_dir_short().bold().magenta(),
+            dir_final,
             git_part,
-            ">".magenta()
-        )
+            prompt_final,
+        );
+
+        let rp = self.render_rprompt().map(|(styled, _)| styled);
+        self.format_prompt_with_rprompt(&base, rp.as_deref())
     }
 
     pub fn render_prompt_clean(&mut self) -> String {
@@ -1878,18 +2108,62 @@ export PATH=$PATH:/usr/local/bin
             "".to_string()
         };
 
-        let git_part = match self.get_git_branch() {
+        let git_part = match self.cached_git_branch.lock().unwrap().clone() {
             Some(branch) => format!(" {}", branch),
             None => "".to_string(),
         };
 
-        format!(
+        let base = format!(
             "{}{}{} {} {} > ",
             status_part,
             ssh_part,
             self.os_logo(),
             self.get_current_dir_short(),
             git_part
-        )
+        );
+
+        let rp = self.render_rprompt().map(|(_, plain)| plain);
+        self.format_prompt_with_rprompt(&base, rp.as_deref())
+    }
+
+    pub fn get_git_branch_for(path: &str) -> Option<String> {
+        let output = Command::new("git")
+            .args(["symbolic-ref", "--short", "HEAD"])
+            .current_dir(path)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .output()
+            .ok()?;
+        if output.status.success() {
+            let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !branch.is_empty() {
+                return Some(branch);
+            }
+        }
+
+        let mut dir = PathBuf::from(path);
+        loop {
+            let git_dir = dir.join(".git");
+            if git_dir.is_dir() {
+                let head_file = git_dir.join("HEAD");
+                if head_file.is_file() {
+                    if let Ok(content) = fs::read_to_string(head_file) {
+                        let content = content.trim();
+                        if content.starts_with("ref: refs/heads/") {
+                            return Some(content.strip_prefix("ref: refs/heads/").unwrap().to_string());
+                        } else if content.starts_with("ref: refs/tags/") {
+                            return Some(content.strip_prefix("ref: refs/tags/").unwrap().to_string());
+                        } else if !content.is_empty() {
+                            return Some("HEAD".to_string());
+                        }
+                    }
+                }
+                break;
+            }
+            if !dir.pop() {
+                break;
+            }
+        }
+        None
     }
 }

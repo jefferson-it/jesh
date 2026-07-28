@@ -135,13 +135,22 @@ pub fn emit_osc7() {
     };
 
     let user = env::var("USER").unwrap_or_else(|_| "user".to_string());
-    let mut hostname_buf = [0i8; 256];
-    let hostname = unsafe {
-        if libc::gethostname(hostname_buf.as_mut_ptr(), hostname_buf.len()) == 0 {
-            let len = hostname_buf.iter().position(|&c| c == 0).unwrap_or(hostname_buf.len());
-            String::from_utf8_lossy(&hostname_buf[..len].iter().map(|&c| c as u8).collect::<Vec<_>>()).into_owned()
-        } else {
-            env::var("HOSTNAME").unwrap_or_else(|_| "localhost".to_string())
+    let hostname: String = match () {
+        #[cfg(unix)]
+        () => {
+            let mut hostname_buf = [0i8; 256];
+            unsafe {
+                if libc::gethostname(hostname_buf.as_mut_ptr(), hostname_buf.len()) == 0 {
+                    let len = hostname_buf.iter().position(|&c| c == 0).unwrap_or(hostname_buf.len());
+                    String::from_utf8_lossy(&hostname_buf[..len].iter().map(|&c| c as u8).collect::<Vec<_>>()).into_owned()
+                } else {
+                    env::var("HOSTNAME").unwrap_or_else(|_| "localhost".to_string())
+                }
+            }
+        }
+        #[cfg(windows)]
+        () => {
+            env::var("COMPUTERNAME").unwrap_or_else(|_| "localhost".to_string())
         }
     };
 
@@ -193,9 +202,10 @@ pub fn emit_osc7() {
     let _ = stdout.flush();
 }
 
+#[cfg(unix)]
 static SHELL_TERMIOS: std::sync::Mutex<Option<libc::termios>> = std::sync::Mutex::new(None);
 
-/// Saves the current shell termios settings (called at shell startup/interactive mode).
+#[cfg(unix)]
 pub fn save_shell_termios() {
     unsafe {
         if libc::isatty(libc::STDIN_FILENO) != 0 {
@@ -209,7 +219,7 @@ pub fn save_shell_termios() {
     }
 }
 
-/// Restores the shell termios settings after a child process exits.
+#[cfg(unix)]
 pub fn restore_shell_termios() {
     unsafe {
         if libc::isatty(libc::STDIN_FILENO) != 0 {
@@ -222,8 +232,7 @@ pub fn restore_shell_termios() {
     }
 }
 
-/// Resets terminal modes (mouse tracking, cursor visibility, bracketed paste)
-/// and flushes unconsumed input from the kernel TTY input queue (`tcflush`).
+#[cfg(unix)]
 pub fn reset_terminal_and_flush_stdin() {
     use std::io::IsTerminal;
     unsafe {
@@ -595,17 +604,118 @@ mod tests {
     }
 }
 
-pub fn kitty_send_image(_data: &[u8], _format: &str, _x: i32, _y: i32, _w: i32) {}
-pub fn osc8_hyperlink(text: &str, url: &str) {
-    let _ = (text, url);
+pub fn set_cursor_bar() {
+    use std::io::Write;
+    let _ = std::io::stdout().write_all(b"\x1b[6 q");
+    let _ = std::io::stdout().flush();
 }
-pub fn osc133_command_start() {}
+
+pub fn set_cursor_block() {
+    use std::io::Write;
+    let _ = std::io::stdout().write_all(b"\x1b[2 q");
+    let _ = std::io::stdout().flush();
+}
+
+pub fn kitty_send_image(data: &[u8], format: &str, _x: i32, _y: i32, _w: i32) {
+    use base64::Engine;
+    use std::io::Write;
+
+    let b64 = base64::engine::general_purpose::STANDARD.encode(data);
+
+    let max_chunk = 4096;
+
+    let total_chunks = (b64.len() + max_chunk - 1) / max_chunk;
+
+    for (i, chunk) in b64.as_bytes().chunks(max_chunk).enumerate() {
+        let is_last = i == total_chunks - 1;
+        let m = if is_last { 0 } else { 1 };
+        let chunk_str = unsafe { std::str::from_utf8_unchecked(chunk) };
+
+        if i == 0 {
+            print!("\x1b_Ga=T,f={},m={};{}\x1b\\", format, m, chunk_str);
+        } else {
+            print!("\x1b_Gm={};{}\x1b\\", m, chunk_str);
+        }
+    }
+
+    let _ = std::io::stdout().flush();
+}
+pub fn osc8_hyperlink(text: &str, url: &str) -> String {
+    if url.is_empty() {
+        return text.to_string();
+    }
+    format!("\x1b]8;;{}\x1b\\{}\x1b]8;;\x1b\\", url, text)
+}
+
+fn url_regex() -> &'static regex::Regex {
+    use std::sync::OnceLock;
+    static RE: OnceLock<regex::Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        regex::Regex::new(r#"(https?://[^\s"'<>()\[\]{}|\\^`]+)"#).unwrap()
+    })
+}
+
+pub fn wrap_urls(text: &str) -> String {
+    url_regex().replace_all(text, |caps: &regex::Captures| {
+        osc8_hyperlink(&caps[0], &caps[0])
+    }).to_string()
+}
+pub fn osc133_command_start() {
+    use std::io::Write;
+    let _ = std::io::stdout().write_all(b"\x1b]133;C\x1b\\");
+}
 pub fn osc133_command_end(exit_code: i32) {
-    let _ = exit_code;
+    use std::io::Write;
+    let _ = write!(std::io::stdout(), "\x1b]133;D;{}\x1b\\", exit_code);
+}
+
+pub fn strip_ansi(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            match chars.next() {
+                Some('[') => {
+                    for c in chars.by_ref() {
+                        if c.is_ascii_uppercase() || c.is_ascii_lowercase() || c == '~' {
+                            break;
+                        }
+                    }
+                }
+                Some(']') => {
+                    let mut iter = chars.by_ref();
+                    while let Some(c) = iter.next() {
+                        if c == '\x07' {
+                            break;
+                        }
+                        if c == '\x1b' {
+                            if iter.next() == Some('\\') {
+                                break;
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    result
 }
 pub fn pasted_text_contains_metacharacters(text: &str) -> bool {
     text.contains(' ') || text.contains('?') || text.contains('&') || text.contains('|')
 }
 pub fn smart_paste_escape(text: &str) -> String {
-    text.to_string()
+    let mut result = String::with_capacity(text.len() + 2);
+    result.push('\'');
+    for c in text.chars() {
+        if c == '\'' {
+            result.push_str("'\\''");
+        } else {
+            result.push(c);
+        }
+    }
+    result.push('\'');
+    result
 }

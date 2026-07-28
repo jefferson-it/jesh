@@ -427,36 +427,41 @@ fn read_redirect_word(&mut self) -> Word {
                 break;
             }
             match c {
-                '@' | '*' | '+' | '?' | '!' if self.chars.peek() == Some(&'(') => {
-                    // Extended glob pattern: @(...), *(...), +(...), ?(...), !(...)
-                    // But first check if it's a glob qualifier like *(/) or *(.)
-                    // We'll handle glob qualifiers after this match by looking ahead
-                    let op = c;
-                    self.chars.next(); // consume the operator
-                    self.chars.next(); // consume '('
-                    flush_literal!();
-                    let mut pattern = String::new();
-                    let mut depth = 1;
-                    while let Some(&pc) = self.chars.peek() {
-                        self.chars.next();
-                        if pc == '(' {
-                            depth += 1;
-                            pattern.push(pc);
-                        } else if pc == ')' {
-                            depth -= 1;
-                            if depth == 0 {
-                                break;
+                '@' | '*' | '+' | '?' | '!' => {
+                    let mut lookahead = self.chars.clone();
+                    lookahead.next();
+                    if lookahead.peek() == Some(&'(') {
+                        // Extended glob pattern: @(...), *(...), +(...), ?(...), !(...)
+                        let op = c;
+                        self.chars.next(); // consume the operator
+                        self.chars.next(); // consume '('
+                        flush_literal!();
+                        let mut pattern = String::new();
+                        let mut depth = 1;
+                        while let Some(&pc) = self.chars.peek() {
+                            self.chars.next();
+                            if pc == '(' {
+                                depth += 1;
+                                pattern.push(pc);
+                            } else if pc == ')' {
+                                depth -= 1;
+                                if depth == 0 {
+                                    break;
+                                }
+                                pattern.push(pc);
+                            } else {
+                                pattern.push(pc);
                             }
-                            pattern.push(pc);
-                        } else {
-                            pattern.push(pc);
                         }
+                        // Store as a literal that will be expanded later
+                        current.push(op);
+                        current.push('(');
+                        current.push_str(&pattern);
+                        current.push(')');
+                    } else {
+                        current.push(c);
+                        self.chars.next();
                     }
-                    // Store as a literal that will be expanded later
-                    current.push(op);
-                    current.push('(');
-                    current.push_str(&pattern);
-                    current.push(')');
                 }
                 '|' | ';' | '<' | '>' => break,
                 '&' if break_on_ampersand => break,
@@ -499,35 +504,6 @@ fn read_redirect_word(&mut self) -> Word {
                         self.chars.next();
                     }
                     segments.push(WordSegment::Tilde(rest));
-                }
-                '@' | '*' | '+' | '?' | '!' if self.chars.peek() == Some(&'(') => {
-                    // Extended glob pattern: @(...), *(...), +(...), ?(...), !(...)
-                    let op = c;
-                    self.chars.next(); // consume the operator
-                    self.chars.next(); // consume '('
-                    flush_literal!();
-                    let mut pattern = String::new();
-                    let mut depth = 1;
-                    while let Some(&pc) = self.chars.peek() {
-                        self.chars.next();
-                        if pc == '(' {
-                            depth += 1;
-                            pattern.push(pc);
-                        } else if pc == ')' {
-                            depth -= 1;
-                            if depth == 0 {
-                                break;
-                            }
-                            pattern.push(pc);
-                        } else {
-                            pattern.push(pc);
-                        }
-                    }
-                    // Store as a literal that will be expanded later
-                    current.push(op);
-                    current.push('(');
-                    current.push_str(&pattern);
-                    current.push(')');
                 }
                 '$' => {
                     let mut cloned = self.chars.clone();

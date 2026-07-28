@@ -1,8 +1,11 @@
 use std::fs::File;
 use std::fs::OpenOptions;
 use std::io::Write;
+#[cfg(unix)]
 use std::os::unix::io::{FromRawFd, OwnedFd};
+#[cfg(unix)]
 use std::os::unix::net::UnixStream;
+#[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 
@@ -50,6 +53,7 @@ fn open_input_file(path: &str) -> File {
 
 /// Duplicates an existing file descriptor (used by `2>&1`, `0<&3`, ...).
 /// Uses `libc::dup()` to create a real copy of the fd.
+#[cfg(unix)]
 fn dup_fd(fd: i32, _writable: bool) -> Stdio {
     let new_fd = unsafe { libc::dup(fd) };
     if new_fd < 0 {
@@ -60,12 +64,23 @@ fn dup_fd(fd: i32, _writable: bool) -> Stdio {
     }
 }
 
+#[cfg(windows)]
+fn dup_fd(_fd: i32, _writable: bool) -> Stdio {
+    Stdio::inherit()
+}
+
 /// Builds a `Stdio` that feeds `content` to a child's stdin via a pipe.
+#[cfg(unix)]
 fn string_to_stdio(content: &str) -> Option<Stdio> {
     let (read, mut write) = UnixStream::pair().ok()?;
     let _ = write.write_all(content.as_bytes());
     drop(write);
     Some(Stdio::from(OwnedFd::from(read)))
+}
+
+#[cfg(windows)]
+fn string_to_stdio(_content: &str) -> Option<Stdio> {
+    None
 }
 
 /// Builds the stdin/stdout/stderr `Stdio` for one command in a pipeline.
@@ -178,22 +193,28 @@ fn spawn_one(
             _ => (Stdio::inherit(), None),
         }
     } else if piped {
-        // Build a manual pipe so stderr can be merged into it (e.g. `2>&1`).
-        if let Ok((read_end, write_end)) = UnixStream::pair() {
-            match write_end.try_clone() {
-                Ok(write_clone) => {
-                    *next_stdin = Some(Stdio::from(OwnedFd::from(read_end)));
-                    (
-                        Stdio::from(OwnedFd::from(write_clone)),
-                        Some(write_end),
-                    )
+        #[cfg(unix)]
+        {
+            if let Ok((read_end, write_end)) = UnixStream::pair() {
+                match write_end.try_clone() {
+                    Ok(write_clone) => {
+                        *next_stdin = Some(Stdio::from(OwnedFd::from(read_end)));
+                        (
+                            Stdio::from(OwnedFd::from(write_clone)),
+                            Some(write_end),
+                        )
+                    }
+                    Err(e) => {
+                        eprintln!("jesh: erro ao criar pipe: {}", e);
+                        (Stdio::inherit(), None)
+                    }
                 }
-                Err(e) => {
-                    eprintln!("jesh: erro ao criar pipe: {}", e);
-                    (Stdio::inherit(), None)
-                }
+            } else {
+                (Stdio::inherit(), None)
             }
-        } else {
+        }
+        #[cfg(windows)]
+        {
             (Stdio::inherit(), None)
         }
     } else if capture_stdout {
@@ -258,8 +279,13 @@ pub fn execute_with(pipe: ExpandedPipeline, state: &crate::shell::ShellState) ->
         return (0, Vec::new());
     }
 
+    #[cfg(unix)]
     let is_tty = state.is_interactive && unsafe { libc::isatty(libc::STDIN_FILENO) != 0 };
+    #[cfg(windows)]
+    let is_tty = false;
+    #[cfg(unix)]
     let mut old_sigint: usize = 0;
+    #[cfg(unix)]
     if is_tty {
         unsafe {
             old_sigint = libc::signal(libc::SIGINT, libc::SIG_IGN);
@@ -278,6 +304,7 @@ pub fn execute_with(pipe: ExpandedPipeline, state: &crate::shell::ShellState) ->
         let piped = i < n - 1;
         let mut process = spawn_one(cmd, piped, &mut next_stdin, false);
 
+        #[cfg(unix)]
         unsafe {
             let is_first = i == 0;
             let first_pgid = pgid;
@@ -299,10 +326,15 @@ pub fn execute_with(pipe: ExpandedPipeline, state: &crate::shell::ShellState) ->
 
         match process.spawn() {
             Ok(child) => {
+                #[cfg(unix)]
                 let child_id = child.id() as libc::pid_t;
                 if i == 0 {
-                    pgid = child_id;
+                    #[cfg(unix)]
+                    { pgid = child_id; }
+                    #[cfg(windows)]
+                    { pgid = child.id(); }
                 }
+                #[cfg(unix)]
                 unsafe {
                     let target = if i == 0 { child_id } else { pgid };
                     let _ = libc::setpgid(child_id, target);
@@ -325,6 +357,7 @@ pub fn execute_with(pipe: ExpandedPipeline, state: &crate::shell::ShellState) ->
                     let _ = child.kill();
                     let _ = child.wait();
                 }
+                #[cfg(unix)]
                 if is_tty {
                     unsafe {
                         let shell_pgid = libc::getpgrp();
@@ -341,6 +374,7 @@ pub fn execute_with(pipe: ExpandedPipeline, state: &crate::shell::ShellState) ->
         }
     }
 
+    #[cfg(unix)]
     if is_tty && pgid != 0 {
         unsafe {
             libc::tcsetpgrp(libc::STDIN_FILENO, pgid);
@@ -359,6 +393,7 @@ pub fn execute_with(pipe: ExpandedPipeline, state: &crate::shell::ShellState) ->
         }
     }
 
+    #[cfg(unix)]
     if is_tty {
         unsafe {
             let shell_pgid = libc::getpgrp();

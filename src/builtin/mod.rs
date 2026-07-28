@@ -85,7 +85,7 @@ pub fn is_executable(cmd: &str) -> bool {
 fn print_help() {
     println!(
         "\
-bjesh — shell interativo
+jesh — shell interativo
 
 Builtins:
   cd [dir]           Muda de diretório (sem args: vai para $HOME)
@@ -210,29 +210,29 @@ pub fn handle_builtin(args: &[String], state: &mut ShellState) -> Option<i32> {
             if let Ok(exe) = env::current_exe() {
                 println!("{}", exe.display());
             } else {
-                println!("bjesh");
+                println!("jesh");
             }
             Some(0)
         }
         "jesh-info" => {
             let exe_str = env::current_exe()
                 .map(|p| p.display().to_string())
-                .unwrap_or_else(|_| "bjesh".to_string());
+                .unwrap_or_else(|_| "jesh".to_string());
             println!("jesh v{} ({})", env!("CARGO_PKG_VERSION"), exe_str);
             Some(0)
         }
         "jesh-version" => {
             let exe_str = env::current_exe()
                 .map(|p| p.display().to_string())
-                .unwrap_or_else(|_| "bjesh".to_string());
+                .unwrap_or_else(|_| "jesh".to_string());
             println!("jesh v{} ({})", env!("CARGO_PKG_VERSION"), exe_str);
             Some(0)
         }
         "version" => {
             let exe_str = env::current_exe()
                 .map(|p| p.display().to_string())
-                .unwrap_or_else(|_| "bjesh".to_string());
-            println!("bjesh {} ({})", env!("CARGO_PKG_VERSION"), exe_str);
+                .unwrap_or_else(|_| "jesh".to_string());
+            println!("jesh {} ({})", env!("CARGO_PKG_VERSION"), exe_str);
             Some(0)
         }
         "true" | ":" => Some(0),

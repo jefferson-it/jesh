@@ -2,17 +2,19 @@ mod builtin;
 mod completion;
 mod executor;
 mod parser;
+mod semantic;
 mod shell;
 mod utils;
 
+use std::cell::RefCell;
+use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, IsTerminal, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::collections::HashMap;
 
 use rustyline::error::ReadlineError;
 use rustyline::history::DefaultHistory;
-use rustyline::{Cmd, ConditionalEventHandler, Config, Editor, Event, EventContext, EventHandler, KeyCode, KeyEvent, Modifiers, RepeatCount, Movement};
+use rustyline::{Cmd, ConditionalEventHandler, Config, EditMode, Editor, Event, EventContext, EventHandler, KeyCode, KeyEvent, Modifiers, RepeatCount, Movement};
 
 use crate::builtin::run_jeofetch;
 use crate::completion::JshHelper;
@@ -20,9 +22,14 @@ use crate::parser::lexer::RedirectTarget;
 use crate::shell::ShellState;
 
 static SIGINT_FLAG: AtomicBool = AtomicBool::new(false);
+static SIGWINCH_FLAG: AtomicBool = AtomicBool::new(false);
 
 extern "C" fn sigint_handler(_sig: i32) {
     SIGINT_FLAG.store(true, Ordering::SeqCst);
+}
+
+extern "C" fn sigwinch_handler(_sig: i32) {
+    SIGWINCH_FLAG.store(true, Ordering::SeqCst);
 }
 
 /// Expands `!!`, `!n`, and `!prefix` history references in a raw input
@@ -256,25 +263,126 @@ fn sync_pwd() {
     }
 }
 
+thread_local! {
+    static KILL_RING: RefCell<VecDeque<String>> = RefCell::new(VecDeque::new());
+    static KILL_RING_POS: RefCell<usize> = RefCell::new(0);
+}
+
+fn kill_ring_push(text: &str) {
+    KILL_RING.with(|ring| {
+        let mut ring = ring.borrow_mut();
+        if ring.len() >= 32 {
+            ring.pop_back();
+        }
+        ring.push_front(text.to_string());
+    });
+    KILL_RING_POS.with(|pos| {
+        *pos.borrow_mut() = 0;
+    });
+}
+
+struct KillLineHandler;
+impl ConditionalEventHandler for KillLineHandler {
+    fn handle(&self, _evt: &Event, _n: RepeatCount, _positive: bool, ctx: &EventContext) -> Option<Cmd> {
+        let line = ctx.line();
+        let pos = ctx.pos();
+        if pos < line.len() {
+            let killed = &line[pos..];
+            kill_ring_push(killed);
+            Some(Cmd::Replace(Movement::WholeBuffer, Some(line[..pos].to_string())))
+        } else {
+            None
+        }
+    }
+}
+
+struct KillWordBackHandler;
+impl ConditionalEventHandler for KillWordBackHandler {
+    fn handle(&self, _evt: &Event, _n: RepeatCount, _positive: bool, ctx: &EventContext) -> Option<Cmd> {
+        let line = ctx.line();
+        let pos = ctx.pos();
+        if pos > 0 {
+            let before = &line[..pos];
+            let trimmed = before.trim_end_matches(|c: char| !c.is_alphanumeric() && c != '_');
+            let word_start = trimmed.rfind(|c: char| !c.is_alphanumeric() && c != '_')
+                .map(|i| i + 1)
+                .unwrap_or(0);
+            if word_start < pos {
+                let killed = &line[word_start..pos];
+                kill_ring_push(killed);
+                let new_line = format!("{}{}", &line[..word_start], &line[pos..]);
+                Some(Cmd::Replace(Movement::WholeBuffer, Some(new_line)))
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+}
+
+struct YankHandler;
+impl ConditionalEventHandler for YankHandler {
+    fn handle(&self, _evt: &Event, _n: RepeatCount, _positive: bool, ctx: &EventContext) -> Option<Cmd> {
+        KILL_RING.with(|ring| {
+            let ring = ring.borrow();
+            if let Some(entry) = ring.front() {
+                let line = ctx.line();
+                let pos = ctx.pos();
+                let new_line = format!("{}{}{}", &line[..pos], entry, &line[pos..]);
+                Some(Cmd::Replace(Movement::WholeBuffer, Some(new_line)))
+            } else {
+                None
+            }
+        })
+    }
+}
+
+struct YankRingHandler;
+impl ConditionalEventHandler for YankRingHandler {
+    fn handle(&self, _evt: &Event, _n: RepeatCount, _positive: bool, ctx: &EventContext) -> Option<Cmd> {
+        KILL_RING.with(|ring| {
+            let ring = ring.borrow();
+            if ring.is_empty() {
+                return None;
+            }
+            KILL_RING_POS.with(|pos_cell| {
+                let mut pos = pos_cell.borrow_mut();
+                *pos = (*pos + 1) % ring.len();
+                if let Some(entry) = ring.get(*pos) {
+                    Some(Cmd::Replace(Movement::WholeBuffer, Some(entry.clone())))
+                } else {
+                    None
+                }
+            })
+        })
+    }
+}
+
 fn run_interactive(mut state: ShellState) {
     state.is_interactive = true;
 
+    #[cfg(unix)]
     unsafe {
         libc::signal(libc::SIGINT, sigint_handler as *const () as usize);
-        
-        // Ignore job control signals so the shell doesn't get suspended
+        libc::signal(libc::SIGWINCH, sigwinch_handler as *const () as usize);
+
         libc::signal(libc::SIGTTOU, libc::SIG_IGN);
         libc::signal(libc::SIGTTIN, libc::SIG_IGN);
         libc::signal(libc::SIGTSTP, libc::SIG_IGN);
         libc::signal(libc::SIGQUIT, libc::SIG_IGN);
 
-        // Put ourselves in our own process group if we are the foreground process
         let pid = libc::getpid();
         let _ = libc::setpgid(pid, pid);
         let _ = libc::tcsetpgrp(libc::STDIN_FILENO, pid);
     }
 
+    #[cfg(unix)]
     crate::utils::save_shell_termios();
+
+    if std::io::stdout().is_terminal() {
+        crate::utils::set_cursor_block();
+    }
 
         let tab_mode = {
         let vars = state.shell_vars.lock().unwrap();
@@ -297,6 +405,7 @@ fn run_interactive(mut state: ShellState) {
     let config = Config::builder()
         .bracketed_paste(true)
         .completion_type(completion_type)
+        .edit_mode(EditMode::Vi)
         .build();
 
     // Enable shell integration for modern terminals
@@ -413,40 +522,56 @@ fn run_interactive(mut state: ShellState) {
         }
     }
 
-    rl.bind_sequence(
-        KeyEvent(KeyCode::Up, Modifiers::empty()),
-        EventHandler::Conditional(Box::new(UpArrowHandler {
+    let kb = crate::shell::history::load_keybindings();
+
+    macro_rules! bind_key {
+        ($key:expr, $mod:expr, $handler:expr) => {
+            rl.bind_sequence(KeyEvent($key, $mod), $handler);
+        };
+    }
+
+    let up_handler: Box<dyn ConditionalEventHandler> = match kb.up.as_deref() {
+        Some("history-prev") | None => Box::new(UpArrowHandler {
             history_mgr: state.history_mgr.clone(),
             shell_vars: state.shell_vars.clone(),
-        })),
-    );
-    rl.bind_sequence(
-        KeyEvent(KeyCode::Down, Modifiers::empty()),
-        EventHandler::Conditional(Box::new(DownArrowHandler)),
-    );
-    rl.bind_sequence(
-        KeyEvent(KeyCode::Char('r'), Modifiers::CTRL),
-        EventHandler::Conditional(Box::new(CtrlRHandler {
+        }),
+        Some("reverse-search") => Box::new(CtrlRHandler {
             history_mgr: state.history_mgr.clone(),
             shell_vars: state.shell_vars.clone(),
-        })),
-    );
-    rl.bind_sequence(
-        KeyEvent(KeyCode::Right, Modifiers::empty()),
-        EventHandler::Conditional(Box::new(CompleteHintHandler)),
-    );
-    rl.bind_sequence(
-        KeyEvent(KeyCode::End, Modifiers::empty()),
-        EventHandler::Conditional(Box::new(CompleteHintHandler)),
-    );
-    rl.bind_sequence(
-        KeyEvent(KeyCode::Char('e'), Modifiers::CTRL),
-        EventHandler::Conditional(Box::new(CompleteHintHandler)),
-    );
-    rl.bind_sequence(
-        KeyEvent(KeyCode::Char('f'), Modifiers::CTRL),
-        Cmd::CompleteHint,
-    );
+        }),
+        _ => Box::new(UpArrowHandler {
+            history_mgr: state.history_mgr.clone(),
+            shell_vars: state.shell_vars.clone(),
+        }),
+    };
+    bind_key!(KeyCode::Up, Modifiers::empty(), EventHandler::Conditional(up_handler));
+
+    let down_handler: Box<dyn ConditionalEventHandler> = match kb.down.as_deref() {
+        Some("history-next") | None => Box::new(DownArrowHandler),
+        _ => Box::new(DownArrowHandler),
+    };
+    bind_key!(KeyCode::Down, Modifiers::empty(), EventHandler::Conditional(down_handler));
+
+    let ctrl_r_handler: Box<dyn ConditionalEventHandler> = match kb.ctrl_r.as_deref() {
+        Some("reverse-search") | None => Box::new(CtrlRHandler {
+            history_mgr: state.history_mgr.clone(),
+            shell_vars: state.shell_vars.clone(),
+        }),
+        _ => Box::new(CtrlRHandler {
+            history_mgr: state.history_mgr.clone(),
+            shell_vars: state.shell_vars.clone(),
+        }),
+    };
+    bind_key!(KeyCode::Char('r'), Modifiers::CTRL, EventHandler::Conditional(ctrl_r_handler));
+
+    bind_key!(KeyCode::Right, Modifiers::empty(), EventHandler::Conditional(Box::new(CompleteHintHandler)));
+    bind_key!(KeyCode::End, Modifiers::empty(), EventHandler::Conditional(Box::new(CompleteHintHandler)));
+    bind_key!(KeyCode::Char('e'), Modifiers::CTRL, EventHandler::Conditional(Box::new(CompleteHintHandler)));
+    bind_key!(KeyCode::Char('f'), Modifiers::CTRL, Cmd::CompleteHint);
+    bind_key!(KeyCode::Char('k'), Modifiers::CTRL, EventHandler::Conditional(Box::new(KillLineHandler)));
+    bind_key!(KeyCode::Char('w'), Modifiers::CTRL, EventHandler::Conditional(Box::new(KillWordBackHandler)));
+    bind_key!(KeyCode::Char('y'), Modifiers::CTRL, EventHandler::Conditional(Box::new(YankHandler)));
+    bind_key!(KeyCode::Char('y'), Modifiers::ALT, EventHandler::Conditional(Box::new(YankRingHandler)));
 
     let helper = JshHelper {
         history_mgr: state.history_mgr.clone(),
@@ -461,6 +586,10 @@ fn run_interactive(mut state: ShellState) {
     loop {
         state.check_bg_jobs();
 
+        if SIGWINCH_FLAG.swap(false, Ordering::SeqCst) {
+            let _ = crossterm::terminal::size();
+        }
+
         let prompt_clean = state.render_prompt_clean();
         let prompt_colored = state.render_prompt();
         crate::completion::CURRENT_COLORED_PROMPT.with(|cell| {
@@ -471,6 +600,7 @@ fn run_interactive(mut state: ShellState) {
             *cell.borrow_mut() = None;
         });
 
+        crate::utils::set_cursor_bar();
         let readline = rl.readline(&prompt_clean);
         match readline {
             Ok(line) => {
@@ -556,6 +686,18 @@ fn run_interactive(mut state: ShellState) {
                         }
                     });
 
+                    if state.get_var("JSH_TRANSIENT_PROMPT") == "true" {
+                        let cols = crossterm::terminal::size().map(|(w, _)| w).unwrap_or(80) as usize;
+                        let trans_line = format!("> {} ", trimmed);
+                        let truncated: String = if trans_line.chars().count() > cols - 1 {
+                            trans_line.chars().take(cols - 4).chain("...".chars()).collect()
+                        } else {
+                            trans_line
+                        };
+                        eprint!("\r\x1b[K{}", truncated);
+                        let _ = std::io::stderr().flush();
+                    }
+
                     if SIGINT_FLAG.load(Ordering::SeqCst) {
                         break;
                     }
@@ -572,12 +714,20 @@ fn run_interactive(mut state: ShellState) {
                         eprintln!("\u{1b}[38;5;240m(\u{23f3} demorou {:.1}s)\u{1b}[0m", elapsed.as_secs_f64());
                     }
                 }
+
+                let git_branch_cache = state.cached_git_branch.clone();
+                let cwd_for_branch = cwd.clone();
+                std::thread::spawn(move || {
+                    let branch = crate::shell::ShellState::get_git_branch_for(&cwd_for_branch);
+                    *git_branch_cache.lock().unwrap() = branch;
+                });
             }
             Err(ReadlineError::Interrupted) => {
                 println!("^C");
             }
             Err(ReadlineError::Eof) => {
                 println!("Saindo do jesh...");
+                crate::utils::set_cursor_block();
                 break;
             }
             Err(err) => {
