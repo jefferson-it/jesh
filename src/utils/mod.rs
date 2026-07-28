@@ -656,10 +656,13 @@ fn url_regex() -> &'static regex::Regex {
 }
 
 pub fn wrap_urls(text: &str) -> String {
-    url_regex().replace_all(text, |caps: &regex::Captures| {
-        osc8_hyperlink(&caps[0], &caps[0])
-    }).to_string()
+    url_regex()
+        .replace_all(text, |caps: &regex::Captures| {
+            osc8_hyperlink(&caps[0], &caps[0])
+        })
+        .to_string()
 }
+
 pub fn osc133_command_start() {
     use std::io::Write;
     let _ = std::io::stdout().write_all(b"\x1b]133;C\x1b\\");

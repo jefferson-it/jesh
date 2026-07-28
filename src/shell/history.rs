@@ -12,6 +12,37 @@ use crossterm::cursor::{MoveUp};
 use crossterm::terminal::{Clear, ClearType};
 use crossterm::event::{self, Event as CEvent, KeyCode, KeyModifiers};
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct Keybindings {
+    #[serde(default)]
+    pub up: Option<String>,
+    #[serde(default)]
+    pub down: Option<String>,
+    #[serde(default)]
+    pub ctrl_r: Option<String>,
+}
+
+pub fn load_keybindings() -> Keybindings {
+    let home = std::env::var("HOME").ok().map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let config_path = home.join(".config/jesh/config.toml");
+    
+    if config_path.exists() {
+        if let Ok(content) = fs::read_to_string(&config_path) {
+            #[derive(Deserialize)]
+            struct RootConfig {
+                keybindings: Option<Keybindings>,
+            }
+            if let Ok(parsed) = toml::from_str::<RootConfig>(&content) {
+                if let Some(kb) = parsed.keybindings {
+                    return kb;
+                }
+            }
+        }
+    }
+    Keybindings::default()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HistoryEntry {
     pub command: String,
