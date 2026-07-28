@@ -57,18 +57,20 @@ export function Landing() {
                 <CopyBtn text={t('landing.installation.curlCmd')} />
               </div>
             </div>
-            <div className="install-block">
-              <strong>{t('landing.installation.cargo')}</strong>
-              <div className="cmd">
-                <code>{t('landing.installation.cargoCmd')}</code>
-                <CopyBtn text={t('landing.installation.cargoCmd')} />
-              </div>
-            </div>
+
+            <h2 id="install-or-build">{t('landing.installation.orBuild')}</h2>
             <div className="install-block">
               <strong>{t('landing.installation.source')}</strong>
               <div className="cmd">
                 <code>{t('landing.installation.sourceCmd')}</code>
                 <CopyBtn text={t('landing.installation.sourceCmd')} />
+              </div>
+            </div>
+            <div className="install-block">
+              <strong>{t('landing.installation.cargo')}</strong>
+              <div className="cmd">
+                <code>{t('landing.installation.cargoCmd')}</code>
+                <CopyBtn text={t('landing.installation.cargoCmd')} />
               </div>
             </div>
 

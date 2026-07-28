@@ -1,7 +1,9 @@
 <!doctype html>
-<html lang="en">
+<html translate="no">
   <head>
     <meta charset="UTF-8" />
+    <meta name="google" content="notranslate" />
+    <meta name="translation" content="no" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>jesh — A modern Unix shell written in Rust</title>
@@ -13,6 +15,22 @@
         if (redirect && redirect !== window.location.href) {
           window.history.replaceState(null, null, redirect);
         }
+      })();
+    </script>
+    <script>
+      // Aplica o tema e lang antes do React montar para evitar flash (FOUC)
+      (function() {
+        // Tema
+        var stored = localStorage.getItem('jesh-theme');
+        var theme = stored === 'dark' || stored === 'light'
+          ? stored
+          : (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+        document.documentElement.setAttribute('data-theme', theme);
+
+        // Idioma
+        var lang = localStorage.getItem('i18nextLng');
+        var supported = ['en', 'pt-BR', 'pt-PT'];
+        document.documentElement.lang = supported.includes(lang) ? lang : 'en';
       })();
     </script>
   </head>

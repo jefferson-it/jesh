@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { useTheme } from '../context/ThemeContext'
 import { useLanguage } from '../context/LanguageContext'
@@ -29,6 +30,18 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const { t } = useLanguage()
   const loc = useLocation()
   const isLanding = loc.pathname === '/docs' || loc.pathname === '/docs/'
+  const [menuOpen, setMenuOpen] = useState(false)
+
+  // Fechar menu ao navegar
+  useEffect(() => {
+    setMenuOpen(false)
+  }, [loc.pathname])
+
+  // Bloquear scroll do body quando menu aberto
+  useEffect(() => {
+    document.body.style.overflow = menuOpen ? 'hidden' : ''
+    return () => { document.body.style.overflow = '' }
+  }, [menuOpen])
 
   return (
     <>
@@ -37,15 +50,48 @@ export function Layout({ children }: { children: React.ReactNode }) {
           <Link to="/docs" className="nav-logo">🐚 jesh</Link>
           <div className="nav-links">
             {navLinks.map(l => (
-              <Link key={l.to} to={l.to}>{t(l.label)}</Link>
+              <Link key={l.to} to={l.to} className="nav-link-item">
+                <span className="nav-link-label">{t(l.label)}</span>
+              </Link>
             ))}
-            <a href="https://github.com/jefferson-it/jesh">{t('nav.github')}</a>
+            <a href="https://github.com/jefferson-it/jesh" className="nav-link-item">
+              <span className="nav-link-label">{t('nav.github')}</span>
+            </a>
             <LanguageSelector />
             <button id="theme-btn" className="theme-btn" onClick={toggle} aria-label={t('theme.toggle')}>
               {theme === 'dark' ? '☀️' : '🌙'}
             </button>
+            <button
+              className={`hamburger${menuOpen ? ' is-open' : ''}`}
+              onClick={() => setMenuOpen(o => !o)}
+              aria-label="Toggle menu"
+              aria-expanded={menuOpen}
+            >
+              <span />
+              <span />
+              <span />
+            </button>
           </div>
         </div>
+      </div>
+
+      {/* Menu mobile */}
+      {menuOpen && <div className="mobile-overlay" onClick={() => setMenuOpen(false)} />}
+      <div className={`mobile-menu${menuOpen ? ' is-open' : ''}`}>
+        <nav>
+          {navLinks.map(l => (
+            <Link key={l.to} to={l.to} onClick={() => setMenuOpen(false)}>{t(l.label)}</Link>
+          ))}
+          <a href="https://github.com/jefferson-it/jesh" onClick={() => setMenuOpen(false)}>
+            {t('nav.github')}
+          </a>
+        </nav>
+        <hr />
+        <nav>
+          {sidebarLinks.map(l => (
+            <Link key={l.to} to={l.to} onClick={() => setMenuOpen(false)}>{t(l.label)}</Link>
+          ))}
+        </nav>
       </div>
 
       {!isLanding && (

@@ -79,10 +79,11 @@
     "installation": {
       "curl": "Instalação Rápida (curl)",
       "curlCmd": "curl https://jesh.jefferson.app.br/install.sh | sh",
-      "cargo": "Via Cargo",
-      "cargoCmd": "cargo install jesh",
+      "orBuild": "Instalação ou Compilação",
       "source": "Compilar do fonte",
-      "sourceCmd": "git clone https://github.com/jefferson-it/jesh && cd jesh && cargo build --release"
+      "sourceCmd": "git clone https://github.com/jefferson-it/jesh && cd jesh && cargo build --release",
+      "cargo": "Via Cargo",
+      "cargoCmd": "cargo install jesh"
     },
     "builtins": {
       "title": "Comandos Internos",

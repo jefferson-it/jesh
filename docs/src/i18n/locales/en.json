@@ -79,10 +79,11 @@
     "installation": {
       "curl": "Quick Install (curl)",
       "curlCmd": "curl https://jesh.jefferson.app.br/install.sh | sh",
-      "cargo": "Via Cargo",
-      "cargoCmd": "cargo install jesh",
+      "orBuild": "Installation or Compilation",
       "source": "Build from source",
-      "sourceCmd": "git clone https://github.com/jefferson-it/jesh && cd jesh && cargo build --release"
+      "sourceCmd": "git clone https://github.com/jefferson-it/jesh && cd jesh && cargo build --release",
+      "cargo": "Via Cargo",
+      "cargoCmd": "cargo install jesh"
     },
     "builtins": {
       "title": "Builtin Commands",
