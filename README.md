@@ -43,6 +43,7 @@ cargo build --release
 - Command and flag descriptions
 
 ### Prompt
+
 - RPROMPT (right prompt) with exit status, git branch, SSH
 - Transient prompt — simplifies previous lines after execution
 - Async rendering — git fetch in background
