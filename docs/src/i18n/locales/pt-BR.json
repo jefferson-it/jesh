@@ -108,10 +108,16 @@
     "title": "Começando",
     "installation": {
       "title": "Instalação",
+      "curl": "Instalação Rápida (curl)",
+      "curlCmd": "curl -fsSL https://jesh.jefferson.app.br/install.sh | sh",
+      "curlDesc": "Baixa e instala o binário pré-compilado mais recente em ~/.local/bin. Requer curl e um shell POSIX.",
       "cargo": "Via Cargo",
       "cargoCmd": "cargo install jesh",
+      "source": "Compilar da fonte",
+      "sourceCmd": "git clone https://github.com/jefferson-it/jesh.git\ncd jesh\ncargo build --release",
       "binary": "Binário Pré-compilado",
       "binaryDesc": "Baixe do GitHub Releases",
+      "binaryNote": "O binário resultante estará em <code>target/release/jesh</code>. Você pode copiá-lo para qualquer lugar no seu <code>$PATH</code>.",
       "aur": "Arch Linux (AUR)",
       "aurCmd": "yay -S jesh"
     },

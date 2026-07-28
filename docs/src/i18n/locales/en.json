@@ -108,10 +108,17 @@
     "title": "Getting Started",
     "installation": {
       "title": "Installation",
+      "curl": "Quick Install (curl)",
+      "curlCmd": "curl -fsSL https://jesh.jefferson.app.br/install.sh | sh",
+      "curlDesc": "Downloads and installs the latest pre-built binary to ~/.local/bin. Requires curl and a POSIX shell.",
       "cargo": "Via Cargo",
       "cargoCmd": "cargo install jesh",
+      "cargoDesc": "This will download the source, compile it, and place the <code>jesh</code> binary in your <code>~/.cargo/bin</code> directory. Make sure that directory is on your <code>$PATH</code>.",
+      "source": "Build from source",
+      "sourceCmd": "git clone https://github.com/jefferson-it/jesh.git\ncd jesh\ncargo build --release",
       "binary": "Pre-built Binary",
       "binaryDesc": "Download from GitHub Releases",
+      "binaryNote": "The resulting binary will be at <code>target/release/jesh</code>. You can copy it anywhere on your <code>$PATH</code>.",
       "aur": "Arch Linux (AUR)",
       "aurCmd": "yay -S jesh"
     },
@@ -124,7 +131,29 @@
     "configuration": {
       "title": "Configuration",
       "desc": "jesh looks for configuration in <code>~/.config/jesh/config.toml</code>. Run <code>jesh --init</code> to generate a default configuration file."
-    }
+    },
+    "basicUsage": {
+      "title": "Basic Usage",
+      "desc": "jesh behaves like a standard Unix shell. Type a command and press <kbd>Enter</kbd> to execute it. Pipes, redirects, and environment variables all work as expected:",
+      "examples": "~> ls -la | grep \".rs\"\n~> echo \"Hello, $USER\" > greeting.txt\n~> cd projects && make"
+    },
+    "completion": {
+      "title": "Tab Completion",
+      "desc": "Press <kbd>Tab</kbd> to complete commands, file paths, and arguments. If there are multiple matches, a TUI menu appears. Use the arrow keys to navigate the menu and <kbd>Enter</kbd> to select. The completion system is programmable via the <code>complete</code> builtin."
+    },
+    "history": {
+      "title": "History Navigation",
+      "desc": "Press <kbd>Up</kbd> and <kbd>Down</kbd> to scroll through previous commands. jesh's history is persisted to disk in JSONL format at <code>~/.local/share/jesh/history.jsonl</code> and supports directory-aware filtering, pinning, and real-time sync across terminal sessions."
+    },
+    "reverseSearch": {
+      "title": "Reverse Search",
+      "desc": "Press <kbd>Ctrl+R</kbd> to enter interactive reverse search. Start typing any portion of a previous command; jesh performs fuzzy/substring matching and displays results ranked by frequency, recency, and directory relevance. Use <kbd>Ctrl+R</kbd> again to cycle through older matches, or use the arrow keys to navigate the list. Press <kbd>Enter</kbd> to execute the selected command or <kbd>Tab</kbd> to place it on the input line for editing."
+    },
+    "autosuggestions": {
+      "title": "Autosuggestions",
+      "desc": "As you type, jesh displays a dimmed suggestion based on your history. Press <kbd>→</kbd> (right arrow) or <kbd>End</kbd> to accept the suggestion. This feature is inspired by Fish and uses the same ranking algorithm as the reverse search."
+    },
+    "nextSteps": "Read the Configuration page to customize your shell, explore the Builtins reference for the full command list, and check Scripting if you want to write jesh scripts."
   },
   "configuration": {
     "title": "Configuration",
