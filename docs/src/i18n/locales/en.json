@@ -77,6 +77,8 @@
       "runJesh": "Run <code>jesh</code> and start typing. Press <kbd>Ctrl+R</kbd> for fuzzy history search, <kbd>Tab</kbd> for completions, and <kbd>→</kbd> to accept autosuggestions."
     },
     "installation": {
+      "curl": "Quick Install (curl)",
+      "curlCmd": "curl https://jesh.jefferson.app.br/install.sh | sh",
       "cargo": "Via Cargo",
       "cargoCmd": "cargo install jesh",
       "source": "Build from source",

@@ -7,20 +7,28 @@ export default function GettingStarted() {
   return (
     <DocPage title={t('gettingStarted.title')}>
       <h2>{t('gettingStarted.installation.title')}</h2>
+
+      <h3>{t('gettingStarted.installation.curl')}</h3>
+      <pre><code>{t('gettingStarted.installation.curlCmd')}</code></pre>
+      <p>{t('gettingStarted.installation.curlDesc')}</p>
+
+      <h3>{t('gettingStarted.installation.binary')}</h3>
       <p>
-        {t('gettingStarted.installation.cargoDesc')}
+        <a href="https://github.com/jefferson-it/jesh/releases" target="_blank" rel="noopener noreferrer">
+          {t('gettingStarted.installation.binaryDesc')}
+        </a>
       </p>
+      <p dangerouslySetInnerHTML={{ __html: t('gettingStarted.installation.binaryNote') }}></p>
+
+      <h3>{t('gettingStarted.installation.cargo')}</h3>
       <pre><code>{t('gettingStarted.installation.cargoCmd')}</code></pre>
-      <p>
-        {t('gettingStarted.installation.cargoNote')}
-      </p>
-      <p>
-        {t('gettingStarted.installation.sourceDesc')}
-      </p>
+      <p dangerouslySetInnerHTML={{ __html: t('gettingStarted.installation.cargoDesc') }}></p>
+
+      <h3>{t('gettingStarted.installation.source')}</h3>
       <pre><code>{t('gettingStarted.installation.sourceCmd')}</code></pre>
-      <p>
-        {t('gettingStarted.installation.binaryNote')}
-      </p>
+
+      <h3>{t('gettingStarted.installation.aur')}</h3>
+      <pre><code>{t('gettingStarted.installation.aurCmd')}</code></pre>
 
       <h2>{t('gettingStarted.firstSteps.title')}</h2>
       <p dangerouslySetInnerHTML={{ __html: t('gettingStarted.firstSteps.step1') }}></p>
@@ -31,7 +39,7 @@ export default function GettingStarted() {
       <p dangerouslySetInnerHTML={{ __html: t('gettingStarted.configuration.desc') }}></p>
 
       <h2>{t('gettingStarted.basicUsage.title')}</h2>
-      <p>{t('gettingStarted.basicUsage.desc')}</p>
+      <p dangerouslySetInnerHTML={{ __html: t('gettingStarted.basicUsage.desc') }}></p>
       <pre><code>{t('gettingStarted.basicUsage.examples')}</code></pre>
 
       <h3>{t('gettingStarted.completion.title')}</h3>

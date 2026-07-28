@@ -30,7 +30,7 @@ export function Landing() {
             <div className="sidebar-section">
               <h3>{t('landing.quickLinks')}</h3>
               <nav>
-                <a href="#install">{t('landing.installation.cargo')}</a>
+                <a href="#install">{t('landing.installation.curl')}</a>
                 <a href="#features">{t('landing.features.title')}</a>
                 <a href="#builtins">{t('landing.builtins.title')}</a>
                 <a href="#docs">{t('landing.documentation')}</a>
@@ -50,7 +50,13 @@ export function Landing() {
               ⚠️ {t('landing.warning')} <Link to="/docs/vs-bash">{t('landing.seeVsBash')}</Link>
             </div>
 
-            <h2 id="install">{t('landing.installation.title')}</h2>
+            <h2 id="install">{t('landing.installation.curl')}</h2>
+            <div className="install-block primary">
+              <div className="cmd">
+                <code>{t('landing.installation.curlCmd')}</code>
+                <CopyBtn text={t('landing.installation.curlCmd')} />
+              </div>
+            </div>
             <div className="install-block">
               <strong>{t('landing.installation.cargo')}</strong>
               <div className="cmd">

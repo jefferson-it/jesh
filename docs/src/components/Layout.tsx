@@ -5,7 +5,7 @@ import { LanguageSelector } from './LanguageSelector'
 
 const navLinks = [
   { to: '/docs/getting-started', label: 'nav.gettingStarted' },
-  { to: '/docs/configuration', label: 'nav.config' },
+  { to: '/docs/configuration', label: 'nav.configuration' },
   { to: '/docs/builtins', label: 'nav.builtins' },
 ]
 
