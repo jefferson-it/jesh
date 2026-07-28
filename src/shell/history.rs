@@ -155,7 +155,7 @@ pub struct HistoryState {
 }
 
 impl HistoryState {
-    fn upsert_entry(&mut self, cmd: &str, last_used: &str, cwd: &str, exit_code: i32, increment_count: bool) {
+    fn upsert_entry(&mut self, cmd: &str, last_used: &str, cwd: &str, exit_code: i32, tty: &str, initial_count: Option<usize>, increment_count: bool) {
         if let Some(&idx) = self.cmd_to_idx.get(cmd) {
             let entry = &mut self.entries[idx];
             if last_used > entry.last_used.as_str() {
@@ -163,6 +163,12 @@ impl HistoryState {
             }
             entry.exit_code = exit_code;
             entry.cwd = cwd.to_string();
+            if !tty.is_empty() {
+                entry.tty = tty.to_string();
+            }
+            if let Some(c) = initial_count {
+                entry.count = c;
+            }
             if increment_count {
                 entry.count += 1;
             }
@@ -177,20 +183,20 @@ impl HistoryState {
                 timestamp: last_used.to_string(),
                 cwd: cwd.to_string(),
                 exit_code,
-                count: 1,
+                count: initial_count.unwrap_or(1),
                 last_used: last_used.to_string(),
-                tty: String::new(),
+                tty: tty.to_string(),
             });
             self.cmd_to_idx.insert(cmd.to_string(), self.entries.len() - 1);
         }
     }
 
-    pub fn add_or_update_entry(&mut self, cmd: &str, timestamp: &str, cwd: &str, exit_code: i32) {
-        self.upsert_entry(cmd, timestamp, cwd, exit_code, true);
+    pub fn add_or_update_entry(&mut self, cmd: &str, timestamp: &str, cwd: &str, exit_code: i32, tty: &str) {
+        self.upsert_entry(cmd, timestamp, cwd, exit_code, tty, None, true);
     }
 
-    fn sync_entry_from_file(&mut self, cmd: &str, last_used: &str, cwd: &str, exit_code: i32) {
-        self.upsert_entry(cmd, last_used, cwd, exit_code, false);
+    fn sync_entry_from_file(&mut self, cmd: &str, last_used: &str, cwd: &str, exit_code: i32, tty: &str, count: usize) {
+        self.upsert_entry(cmd, last_used, cwd, exit_code, tty, Some(count), false);
     }
 
     fn trim_to_size(&mut self) {
@@ -281,6 +287,8 @@ impl HistoryState {
                     &entry.last_used,
                     &entry.cwd,
                     entry.exit_code,
+                    &entry.tty,
+                    entry.count,
                 );
             }
         }
@@ -306,11 +314,14 @@ impl HistoryState {
                 continue;
             }
             if let Ok(entry) = serde_json::from_str::<HistoryEntry>(trimmed) {
-                self.add_or_update_entry(
+                self.upsert_entry(
                     &entry.command,
                     &entry.last_used,
                     &entry.cwd,
                     entry.exit_code,
+                    &entry.tty,
+                    Some(entry.count),
+                    false,
                 );
             }
         }
@@ -418,10 +429,9 @@ impl HistoryManager {
         }
 
         let tty = current_tty();
-        state.add_or_update_entry(trimmed, &now, cwd, exit_code);
+        state.add_or_update_entry(trimmed, &now, cwd, exit_code, &tty);
 
         if let Some(&idx) = state.cmd_to_idx.get(trimmed) {
-            state.entries[idx].tty = tty.clone();
             if let Err(e) = append_entry_to_file(&path, &state.entries[idx]) {
                 eprintln!("jesh: erro ao salvar histórico: {}", e);
             }
@@ -486,13 +496,16 @@ impl HistoryManager {
         let mut local = Vec::new();
         let mut global = Vec::new();
         let mut seen = HashSet::new();
+        let share_history = state.config.share_history;
 
         for entry in state.entries.iter().rev() {
             if entry.command.starts_with(query) {
                 if !seen.insert(entry.command.clone()) {
                     continue;
                 }
-                if entry.cwd == current_dir {
+                if share_history {
+                    global.push(entry.command.clone());
+                } else if entry.cwd == current_dir {
                     local.push(entry.command.clone());
                 } else {
                     global.push(entry.command.clone());
@@ -500,25 +513,32 @@ impl HistoryManager {
             }
         }
 
-        let mut combined = local;
-        combined.extend(global);
-        combined
+        if share_history {
+            global
+        } else {
+            let mut combined = local;
+            combined.extend(global);
+            combined
+        }
     }
 
     pub fn search(&self, query: &str, cwd: &str, limit: usize) -> Vec<String> {
-        let state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap();
+        let _ = state.sync_history();
         let mut matches = Vec::new();
         let total = state.entries.len();
         if total == 0 {
             return Vec::new();
         }
 
+        let share_history = state.config.share_history;
+
         for (idx, entry) in state.entries.iter().enumerate() {
             let is_pinned = state.pins.contains(&entry.command);
             let score = calculate_reverse_search_score(
                 &entry.command,
                 query,
-                cwd,
+                if share_history { &entry.cwd } else { cwd },
                 &entry.cwd,
                 is_pinned,
                 idx,
@@ -763,7 +783,7 @@ fn import_legacy_history(state: &mut HistoryState) {
                     }
                 }
 
-                state.add_or_update_entry(&cmd, &timestamp, &home.to_string_lossy(), 0);
+                state.add_or_update_entry(&cmd, &timestamp, &home.to_string_lossy(), 0, "");
             }
         }
     }
@@ -794,14 +814,14 @@ fn import_legacy_history(state: &mut HistoryState) {
 
                         let cmd_trimmed = cmd.trim();
                         if !cmd_trimmed.is_empty() {
-                            state.add_or_update_entry(cmd_trimmed, &timestamp, &home.to_string_lossy(), 0);
+                            state.add_or_update_entry(cmd_trimmed, &timestamp, &home.to_string_lossy(), 0, "");
                         }
                     }
                 } else {
                     let cmd_trimmed = line.trim();
                     if !cmd_trimmed.is_empty() {
                         let timestamp = Local::now().to_rfc3339();
-                        state.add_or_update_entry(cmd_trimmed, &timestamp, &home.to_string_lossy(), 0);
+                        state.add_or_update_entry(cmd_trimmed, &timestamp, &home.to_string_lossy(), 0, "");
                     }
                 }
             }

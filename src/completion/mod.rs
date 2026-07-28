@@ -302,6 +302,7 @@ use std::cell::RefCell;
 
 thread_local! {
     pub static CURRENT_COLORED_PROMPT: RefCell<String> = RefCell::new(String::new());
+    pub static CURRENT_COLORED_RPROMPT: RefCell<Option<String>> = RefCell::new(None);
     static COMPLETION_STATE: RefCell<Option<*mut crate::shell::ShellState>> = const { RefCell::new(None) };
 }
 
@@ -1101,7 +1102,23 @@ impl Highlighter for JshHelper {
         if default {
             let colored = CURRENT_COLORED_PROMPT.with(|cell| cell.borrow().clone());
             if !colored.is_empty() {
-                Cow::Owned(colored)
+                let rprompt = CURRENT_COLORED_RPROMPT.with(|cell| cell.borrow().clone());
+                if let Some(rp) = rprompt {
+                    let cols = crossterm::terminal::size().map(|(w, _)| w).unwrap_or(80) as usize;
+                    let rp_plain = crate::utils::strip_ansi(&rp);
+                    use unicode_width::UnicodeWidthStr;
+                    let rp_width = UnicodeWidthStr::width(rp_plain.as_str());
+                    let prompt_plain = crate::utils::strip_ansi(&colored);
+                    let prompt_width = UnicodeWidthStr::width(prompt_plain.as_str());
+                    if prompt_width + rp_width < cols {
+                        let gap = cols - prompt_width - rp_width;
+                        Cow::Owned(format!("{}\x1b[s{}{}\x1b[u", colored, " ".repeat(gap), rp))
+                    } else {
+                        Cow::Owned(format!("{} {}", colored, rp))
+                    }
+                } else {
+                    Cow::Owned(colored)
+                }
             } else {
                 Cow::Borrowed(prompt)
             }

@@ -592,8 +592,12 @@ fn run_interactive(mut state: ShellState) {
 
         let prompt_clean = state.render_prompt_clean();
         let prompt_colored = state.render_prompt();
+        let rprompt = state.render_rprompt().map(|(styled, _)| styled);
         crate::completion::CURRENT_COLORED_PROMPT.with(|cell| {
             *cell.borrow_mut() = prompt_colored;
+        });
+        crate::completion::CURRENT_COLORED_RPROMPT.with(|cell| {
+            *cell.borrow_mut() = rprompt;
         });
 
         NAVIGATION.with(|cell| {
@@ -601,6 +605,11 @@ fn run_interactive(mut state: ShellState) {
         });
 
         crate::utils::set_cursor_bar();
+        use std::io::Write;
+        if std::io::stdout().is_terminal() {
+            let _ = std::io::stdout().write_all(b"\x1b[?2004h");
+            let _ = std::io::stdout().flush();
+        }
         let readline = rl.readline(&prompt_clean);
         match readline {
             Ok(line) => {
@@ -609,17 +618,7 @@ fn run_interactive(mut state: ShellState) {
                     continue;
                 }
 
-                let line = if crate::utils::pasted_text_contains_metacharacters(line) {
-                    let escaped = crate::utils::smart_paste_escape(line);
-                    if escaped != line {
-                        eprintln!("\x1b[33mjesh: smart paste: wrapped in quotes\x1b[0m");
-                        escaped
-                    } else {
-                        line.to_string()
-                    }
-                } else {
-                    line.to_string()
-                };
+                let line = line.to_string();
 
                 state.maybe_hot_reload();
 

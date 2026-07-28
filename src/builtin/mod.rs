@@ -627,7 +627,7 @@ pub fn handle_builtin(args: &[String], state: &mut ShellState) -> Option<i32> {
                     .args(&argv[1..])
                     .status()
                 {
-                    state.last_exit_status = cmd.code().unwrap_or(1);
+                    state.last_exit_status = crate::utils::exit_code_from_status(cmd);
                 } else {
                     state.last_exit_status = 1;
                 }

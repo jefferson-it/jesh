@@ -22,10 +22,8 @@ pub fn run_command_list(
         };
 
         if should_run {
-            crate::utils::osc133_command_start();
             let heredoc = heredoc_bodies.get(i).and_then(|o| o.as_deref());
             run_and_or(state, andor, heredoc);
-            crate::utils::osc133_command_end(state.last_exit_status);
         }
 
         prev_op = *op;

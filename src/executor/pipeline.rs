@@ -386,7 +386,7 @@ pub fn execute_with(pipe: ExpandedPipeline, state: &crate::shell::ShellState) ->
     for mut child in children {
         match child.wait() {
             Ok(status) => {
-                last_status = status.code().unwrap_or(0);
+                last_status = crate::utils::exit_code_from_status(status);
                 statuses.push(last_status);
             }
             Err(_) => last_status = 1,

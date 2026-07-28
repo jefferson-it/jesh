@@ -722,3 +722,20 @@ pub fn smart_paste_escape(text: &str) -> String {
     result.push('\'');
     result
 }
+
+#[cfg(unix)]
+pub fn exit_code_from_status(status: std::process::ExitStatus) -> i32 {
+    use std::os::unix::process::ExitStatusExt;
+    status.code().unwrap_or_else(|| {
+        if let Some(sig) = status.signal() {
+            128 + sig
+        } else {
+            0
+        }
+    })
+}
+
+#[cfg(windows)]
+pub fn exit_code_from_status(status: std::process::ExitStatus) -> i32 {
+    status.code().unwrap_or(0)
+}

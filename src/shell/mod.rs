@@ -268,7 +268,14 @@ impl ShellState {
                 let mut status: i32 = 0;
                 let ret = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
                 if ret == pid {
-                    let exit_code = unsafe { libc::WEXITSTATUS(status) };
+                    let exited = libc::WIFEXITED(status);
+                    let exit_code = if exited {
+                        libc::WEXITSTATUS(status)
+                    } else if libc::WIFSIGNALED(status) {
+                        128 + libc::WTERMSIG(status)
+                    } else {
+                        1
+                    };
                     let cmd = &jobs[i].command;
                     let elapsed = jobs[i].start_time.elapsed().map(|d| d.as_secs_f64()).unwrap_or(0.0);
                     if exit_code == 0 {
@@ -417,7 +424,7 @@ export PATH=$PATH:/usr/local/bin
             .arg(&script)
             .status()
             .ok()?;
-        Some(status.code().unwrap_or(1))
+        Some(crate::utils::exit_code_from_status(status))
     }
 
     /// Runs a block of script text line by line through the same
@@ -1934,7 +1941,7 @@ export PATH=$PATH:/usr/local/bin
         logo
     }
 
-    fn render_rprompt(&mut self) -> Option<(String, String)> {
+    pub fn render_rprompt(&mut self) -> Option<(String, String)> {
         let mut parts_styled = Vec::new();
         let mut parts_plain = Vec::new();
 
@@ -1953,13 +1960,6 @@ export PATH=$PATH:/usr/local/bin
             let host_final = if host_styled != host { host_styled } else { host.clone().bold().cyan().to_string() };
             parts_styled.push(format!("{}@{} 🔐 ", user_final, host_final));
             parts_plain.push(format!("{}@{} 🔐 ", user, host));
-        }
-
-        if let Some(branch) = self.get_git_branch() {
-            let styled = self.apply_theme_color(&branch, "JSH_THEME_RPROMPT_GIT_COLOR");
-            let final_branch = if styled != branch { styled } else { branch.clone().green().to_string() };
-            parts_styled.push(format!(" {} ", final_branch));
-            parts_plain.push(format!(" {} ", branch));
         }
 
         if !parts_styled.is_empty() {
@@ -2025,18 +2025,6 @@ export PATH=$PATH:/usr/local/bin
         }
     }
 
-    fn format_prompt_with_rprompt(&mut self, prompt: &str, rprompt_styled: Option<&str>) -> String {
-        if let Some(rp) = rprompt_styled {
-            let cols = crossterm::terminal::size().map(|(w, _)| w).unwrap_or(80) as usize;
-            let rp_plain = crate::utils::strip_ansi(rp);
-            let rp_width = UnicodeWidthStr::width(rp_plain.as_str());
-            let prompt_width = UnicodeWidthStr::width(prompt);
-            let gap = if prompt_width + rp_width < cols { cols - prompt_width - rp_width } else { 1 };
-            format!("{}{}{}", prompt, " ".repeat(gap), rp)
-        } else {
-            prompt.to_string()
-        }
-    }
 
     pub fn render_prompt(&mut self) -> String {
         crate::utils::emit_osc7();
@@ -2049,7 +2037,7 @@ export PATH=$PATH:/usr/local/bin
         let status_part = if self.last_exit_status == 0 {
             "".to_string()
         } else {
-            format!("✘{} ", err_color(&self.last_exit_status.to_string()))
+            format!("✘{}", err_color(&self.last_exit_status.to_string()))
         };
 
         let ssh_part = if self.is_ssh() {
@@ -2059,18 +2047,9 @@ export PATH=$PATH:/usr/local/bin
             let host_styled = self.apply_theme_color(&host, "JSH_THEME_SSH_HOST_COLOR");
             let u = if user_styled != user { user_styled } else { user.bold().magenta().to_string() };
             let h = if host_styled != host { host_styled } else { host.bold().cyan().to_string() };
-            format!("{}@{} 🔐 ", u, h)
+            format!("{}@{} 🔐", u, h)
         } else {
             "".to_string()
-        };
-
-        let git_part = match self.cached_git_branch.lock().unwrap().clone() {
-            Some(branch) => {
-                let styled = self.apply_theme_color(&branch, "JSH_THEME_GIT_COLOR");
-                let b = if styled != branch { styled } else { branch.green().to_string() };
-                format!(" {} ", b)
-            }
-            None => "".to_string(),
         };
 
         let dir_styled = self.apply_theme_color(&self.get_current_dir_short(), "JSH_THEME_DIR_COLOR");
@@ -2079,51 +2058,61 @@ export PATH=$PATH:/usr/local/bin
         let prompt_styled = self.apply_theme_color(">", "JSH_THEME_PROMPT_COLOR");
         let prompt_final = if prompt_styled != ">" { prompt_styled } else { ">".magenta().to_string() };
 
-        let base = format!(
-            "{}{}{} {} {} {} ",
-            status_part,
-            ssh_part,
-            self.os_logo(),
-            dir_final,
-            git_part,
-            prompt_final,
-        );
+        let mut base_parts = Vec::new();
+        if !status_part.is_empty() {
+            base_parts.push(status_part.trim().to_string());
+        }
+        if !ssh_part.is_empty() {
+            base_parts.push(ssh_part.trim().to_string());
+        }
+        let logo = self.os_logo();
+        if !logo.is_empty() {
+            base_parts.push(logo);
+        }
+        base_parts.push(dir_final);
+        if let Some(branch) = self.get_git_branch() {
+            let styled = self.apply_theme_color(&branch, "JSH_THEME_GIT_COLOR");
+            let b = if styled != branch { styled } else { branch.green().to_string() };
+            base_parts.push(b);
+        }
+        base_parts.push(prompt_final);
 
-        let rp = self.render_rprompt().map(|(styled, _)| styled);
-        self.format_prompt_with_rprompt(&base, rp.as_deref())
+        base_parts.join(" ") + " "
     }
 
     pub fn render_prompt_clean(&mut self) -> String {
         let status_part = if self.last_exit_status == 0 {
             "".to_string()
         } else {
-            format!("✘ {} ", self.last_exit_status)
+            format!("✘ {}", self.last_exit_status)
         };
 
         let ssh_part = if self.is_ssh() {
             let user = env::var("USER").unwrap_or_else(|_| "user".to_string());
             let host = env::var("HOSTNAME").unwrap_or_else(|_| "host".to_string());
-            format!("{}@{} 🔐 ", user, host)
+            format!("{}@{} 🔐", user, host)
         } else {
             "".to_string()
         };
 
-        let git_part = match self.cached_git_branch.lock().unwrap().clone() {
-            Some(branch) => format!(" {}", branch),
-            None => "".to_string(),
-        };
+        let mut base_parts = Vec::new();
+        if !status_part.is_empty() {
+            base_parts.push(status_part.trim().to_string());
+        }
+        if !ssh_part.is_empty() {
+            base_parts.push(ssh_part.trim().to_string());
+        }
+        let logo = self.os_logo();
+        if !logo.is_empty() {
+            base_parts.push(logo);
+        }
+        base_parts.push(self.get_current_dir_short());
+        if let Some(branch) = self.get_git_branch() {
+            base_parts.push(branch);
+        }
+        base_parts.push(">".to_string());
 
-        let base = format!(
-            "{}{}{} {} {} > ",
-            status_part,
-            ssh_part,
-            self.os_logo(),
-            self.get_current_dir_short(),
-            git_part
-        );
-
-        let rp = self.render_rprompt().map(|(_, plain)| plain);
-        self.format_prompt_with_rprompt(&base, rp.as_deref())
+        base_parts.join(" ") + " "
     }
 
     pub fn get_git_branch_for(path: &str) -> Option<String> {
