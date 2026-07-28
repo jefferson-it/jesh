@@ -10,18 +10,18 @@ const navLinks = [
 ]
 
 const sidebarLinks = [
-  { to: '/docs/getting-started', label: 'sidebar.gettingStarted' },
-  { to: '/docs/configuration', label: 'sidebar.configuration' },
-  { to: '/docs/builtins', label: 'sidebar.builtins' },
-  { to: '/docs/scripting', label: 'sidebar.scripting' },
-  { to: '/docs/parser', label: 'sidebar.parser' },
-  { to: '/docs/globbing', label: 'sidebar.globbing' },
-  { to: '/docs/autocomplete', label: 'sidebar.autocomplete' },
-  { to: '/docs/prompt', label: 'sidebar.prompt' },
-  { to: '/docs/jobs', label: 'sidebar.jobs' },
-  { to: '/docs/history', label: 'sidebar.history' },
-  { to: '/docs/vs-bash', label: 'sidebar.vsBash' },
-  { to: '/docs/examples', label: 'sidebar.examples' },
+  { to: '/docs/getting-started', label: 'gettingStarted.title' },
+  { to: '/docs/configuration', label: 'configuration.title' },
+  { to: '/docs/builtins', label: 'builtins.title' },
+  { to: '/docs/scripting', label: 'scripting.title' },
+  { to: '/docs/parser', label: 'parser.title' },
+  { to: '/docs/globbing', label: 'globbing.title' },
+  { to: '/docs/autocomplete', label: 'autocomplete.title' },
+  { to: '/docs/prompt', label: 'prompt.title' },
+  { to: '/docs/jobs', label: 'jobs.title' },
+  { to: '/docs/history', label: 'history.title' },
+  { to: '/docs/vs-bash', label: 'vsBash.title' },
+  { to: '/docs/examples', label: 'examples.title' },
 ]
 
 export function Layout({ children }: { children: React.ReactNode }) {
