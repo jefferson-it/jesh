@@ -2084,7 +2084,7 @@ export PATH=$PATH:/usr/local/bin
         let status_part = if self.last_exit_status == 0 {
             "".to_string()
         } else {
-            format!("✘ {}", self.last_exit_status)
+            format!("✘{}", self.last_exit_status)
         };
 
         let ssh_part = if self.is_ssh() {
