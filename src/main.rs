@@ -474,18 +474,50 @@ fn run_interactive(mut state: ShellState) {
         };
     }
 
-    let up_handler = match kb.up.as_deref() {
-        Some("history-prev") | None => Cmd::HistorySearchBackward,
-        Some("reverse-search") => Cmd::HistorySearchBackward,
-        _ => Cmd::HistorySearchBackward,
-    };
-    bind_key!(KeyCode::Up, Modifiers::empty(), up_handler);
+    thread_local! {
+        static EMPTY_SEARCH: std::cell::Cell<bool> = std::cell::Cell::new(false);
+    }
 
-    let down_handler = match kb.down.as_deref() {
-        Some("history-next") | None => Cmd::HistorySearchForward,
-        _ => Cmd::HistorySearchForward,
+    struct SmartUpHandler;
+    impl ConditionalEventHandler for SmartUpHandler {
+        fn handle(&self, _evt: &Event, _n: RepeatCount, _positive: bool, ctx: &EventContext) -> Option<Cmd> {
+            if ctx.line().is_empty() {
+                EMPTY_SEARCH.with(|c| c.set(true));
+                Some(Cmd::PreviousHistory)
+            } else if EMPTY_SEARCH.with(|c| c.get()) {
+                Some(Cmd::PreviousHistory)
+            } else {
+                Some(Cmd::HistorySearchBackward)
+            }
+        }
+    }
+
+    struct SmartDownHandler;
+    impl ConditionalEventHandler for SmartDownHandler {
+        fn handle(&self, _evt: &Event, _n: RepeatCount, _positive: bool, ctx: &EventContext) -> Option<Cmd> {
+            if ctx.line().is_empty() {
+                EMPTY_SEARCH.with(|c| c.set(true));
+                Some(Cmd::NextHistory)
+            } else if EMPTY_SEARCH.with(|c| c.get()) {
+                Some(Cmd::NextHistory)
+            } else {
+                Some(Cmd::HistorySearchForward)
+            }
+        }
+    }
+
+    let up_handler: Box<dyn ConditionalEventHandler> = match kb.up.as_deref() {
+        Some("history-prev") | None => Box::new(SmartUpHandler),
+        Some("reverse-search") => Box::new(SmartUpHandler),
+        _ => Box::new(SmartUpHandler),
     };
-    bind_key!(KeyCode::Down, Modifiers::empty(), down_handler);
+    bind_key!(KeyCode::Up, Modifiers::empty(), EventHandler::Conditional(up_handler));
+
+    let down_handler: Box<dyn ConditionalEventHandler> = match kb.down.as_deref() {
+        Some("history-next") | None => Box::new(SmartDownHandler),
+        _ => Box::new(SmartDownHandler),
+    };
+    bind_key!(KeyCode::Down, Modifiers::empty(), EventHandler::Conditional(down_handler));
 
     let ctrl_r_handler: Box<dyn ConditionalEventHandler> = match kb.ctrl_r.as_deref() {
         Some("reverse-search") | None => Box::new(CtrlRHandler {
@@ -565,6 +597,7 @@ fn run_interactive(mut state: ShellState) {
             let _ = rl.add_history_entry(entry.as_str());
         }
 
+        EMPTY_SEARCH.with(|c| c.set(false));
         let readline = rl.readline(&prompt_clean);
         EDITOR_PTR.with(|cell| {
             *cell.borrow_mut() = None;
