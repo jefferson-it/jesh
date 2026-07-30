@@ -877,14 +877,6 @@ pub fn interactive_reverse_search(
         stdout.flush()?;
         last_num_lines = num_lines;
 
-        match event::poll(std::time::Duration::from_millis(500)) {
-            Ok(true) => {}
-            Ok(false) => continue,
-            Err(_) => {
-                let _ = crossterm::terminal::disable_raw_mode();
-                return Ok(None);
-            }
-        }
         match event::read() {
             Ok(CEvent::Key(key_event)) if key_event.kind == event::KeyEventKind::Press => {
                 match (key_event.code, key_event.modifiers) {

@@ -314,6 +314,58 @@ pub fn set_completion_state(state: &mut crate::shell::ShellState) {
     });
 }
 
+#[cfg(target_os = "linux")]
+fn get_linux_processes() -> Vec<(String, String)> {
+    let mut procs = Vec::new();
+    if let Ok(entries) = fs::read_dir("/proc") {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if name_str.chars().all(|c| c.is_ascii_digit()) {
+                let pid = name_str.to_string();
+                if let Ok(comm) = fs::read_to_string(entry.path().join("comm")) {
+                    let name = comm.trim().to_string();
+                    if !name.is_empty() {
+                        procs.push((name, pid));
+                    }
+                }
+            }
+        }
+    }
+    procs.sort_by(|a, b| a.0.cmp(&b.0));
+    procs.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1);
+    procs
+}
+
+#[cfg(not(target_os = "linux"))]
+fn get_linux_processes() -> Vec<(String, String)> {
+    let mut procs = Vec::new();
+    if let Ok(output) = std::process::Command::new("ps")
+        .args(&["-ax", "-o", "comm,pid"])
+        .output()
+    {
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            for line in stdout.lines().skip(1) {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 2 {
+                    let pid = parts.last().unwrap().to_string();
+                    let comm_parts = &parts[..parts.len() - 1];
+                    let comm = comm_parts.join(" ");
+                    let comm_base = Path::new(&comm)
+                        .file_name()
+                        .map(|f| f.to_string_lossy().to_string())
+                        .unwrap_or(comm);
+                    procs.push((comm_base, pid));
+                }
+            }
+        }
+    }
+    procs.sort_by(|a, b| a.0.cmp(&b.0));
+    procs.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1);
+    procs
+}
+
 pub fn get_completions(
     line: &str,
     pos: usize,
@@ -331,6 +383,115 @@ pub fn get_completions(
     let leading: Vec<&str> = prefix[..word_start].split_whitespace().collect();
     let arg_index = leading.len();
     let first_word = leading.first().copied().unwrap_or("");
+
+    let mut command_name = "";
+    let mut cmd_arg_index = 0;
+    for (i, &tok) in leading.iter().enumerate().rev() {
+        if matches!(tok, "|" | "&" | ";" | "&&" | "||" | "(" | ")") {
+            break;
+        }
+        command_name = tok;
+        cmd_arg_index = leading.len() - i;
+    }
+
+    if (command_name == "pkill" || command_name == "killall" || command_name == "pgrep" || command_name == "pidof" || command_name == "kill")
+        && cmd_arg_index >= 1
+        && !word.starts_with('-')
+    {
+        let procs = get_linux_processes();
+        let wl = word.to_lowercase();
+        let mut candidates = Vec::new();
+
+        if command_name == "pkill" || command_name == "killall" || command_name == "pgrep" || command_name == "pidof" {
+            let mut seen = std::collections::HashSet::new();
+            
+            // Try prefix match first
+            for (proc_name, pid) in &procs {
+                if proc_name.to_lowercase().starts_with(&wl) {
+                    if seen.insert(proc_name.clone()) {
+                        candidates.push(Pair {
+                            display: format!("{}  (pid: {})", proc_name, pid),
+                            replacement: format!("{} ", proc_name),
+                        });
+                    }
+                }
+            }
+
+            // If no prefix match, try fuzzy match
+            if candidates.is_empty() && !wl.is_empty() {
+                let mut scored_cands = Vec::new();
+                for (proc_name, pid) in &procs {
+                    let score = fuzzy_score(&wl, proc_name);
+                    if score > 0 {
+                        if seen.insert(proc_name.clone()) {
+                            scored_cands.push((score, Pair {
+                                display: format!("{}  (pid: {})", proc_name, pid),
+                                replacement: format!("{} ", proc_name),
+                            }));
+                        }
+                    }
+                }
+                scored_cands.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.replacement.cmp(&b.1.replacement)));
+                candidates = scored_cands.into_iter().map(|(_, p)| p).collect();
+            }
+
+            // If empty, suggest all active processes
+            if candidates.is_empty() && wl.is_empty() {
+                for (proc_name, pid) in &procs {
+                    if seen.insert(proc_name.clone()) {
+                        candidates.push(Pair {
+                            display: format!("{}  (pid: {})", proc_name, pid),
+                            replacement: format!("{} ", proc_name),
+                        });
+                    }
+                }
+            }
+
+            if !candidates.is_empty() {
+                return (word_start, candidates);
+            }
+        } else if command_name == "kill" {
+            // Try prefix match on PID or process name
+            for (proc_name, pid) in &procs {
+                if pid.starts_with(&wl) || proc_name.to_lowercase().starts_with(&wl) {
+                    candidates.push(Pair {
+                        display: format!("{}  {}", pid, proc_name),
+                        replacement: format!("{} ", pid),
+                    });
+                }
+            }
+
+            // Fuzzy match on process name if no prefix matches
+            if candidates.is_empty() && !wl.is_empty() {
+                let mut scored_cands = Vec::new();
+                for (proc_name, pid) in &procs {
+                    let score = fuzzy_score(&wl, proc_name);
+                    if score > 0 {
+                        scored_cands.push((score, Pair {
+                            display: format!("{}  {}", pid, proc_name),
+                            replacement: format!("{} ", pid),
+                        }));
+                    }
+                }
+                scored_cands.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.replacement.cmp(&b.1.replacement)));
+                candidates = scored_cands.into_iter().map(|(_, p)| p).collect();
+            }
+
+            // If empty, suggest all processes
+            if candidates.is_empty() && wl.is_empty() {
+                for (proc_name, pid) in &procs {
+                    candidates.push(Pair {
+                        display: format!("{}  {}", pid, proc_name),
+                        replacement: format!("{} ", pid),
+                    });
+                }
+            }
+
+            if !candidates.is_empty() {
+                return (word_start, candidates);
+            }
+        }
+    }
 
     if let Some(var_prefix) = word.strip_prefix('$') {
         let mut candidates = Vec::new();
@@ -829,6 +990,12 @@ pub fn interactive_complete(candidates: &[Pair]) -> io::Result<Option<usize>> {
                     (KeyCode::Tab, m) if m == KeyModifiers::SHIFT => {
                         selected = if selected == 0 { candidates.len() - 1 } else { selected - 1 };
                     }
+                    (KeyCode::Right, _) => {
+                        selected = (selected + 1) % candidates.len();
+                    }
+                    (KeyCode::Left, _) => {
+                        selected = if selected == 0 { candidates.len() - 1 } else { selected - 1 };
+                    }
                     (KeyCode::Backspace, _) | (KeyCode::Esc, _) => {
                         break None;
                     }
@@ -965,14 +1132,14 @@ pub fn interactive_complete_hybrid(candidates: &[Pair]) -> io::Result<Option<usi
                             selected - 1
                         };
                     }
-                    (KeyCode::Up, _) => {
+                    (KeyCode::Up, _) | (KeyCode::Left, _) => {
                         selected = if selected == 0 {
                             candidates.len() - 1
                         } else {
                             selected - 1
                         };
                     }
-                    (KeyCode::Down, _) => {
+                    (KeyCode::Down, _) | (KeyCode::Right, _) => {
                         selected = (selected + 1) % candidates.len();
                     }
                     (KeyCode::Backspace, _) | (KeyCode::Esc, _) => {
@@ -1055,7 +1222,7 @@ impl Completer for JshHelper {
                 }
                 match interactive_complete_hybrid(&candidates) {
                     Ok(Some(idx)) => Ok((word_start, vec![candidates[idx].clone()])),
-                    _ => Ok((0, Vec::new())),
+                    _ => Ok((word_start, Vec::new())),
                 }
             }
             TabMode::Interactive => {
@@ -1064,7 +1231,7 @@ impl Completer for JshHelper {
                 }
                 match interactive_complete(&candidates) {
                     Ok(Some(idx)) => Ok((word_start, vec![candidates[idx].clone()])),
-                    _ => Ok((0, Vec::new())),
+                    _ => Ok((word_start, Vec::new())),
                 }
             }
         }
@@ -1491,5 +1658,19 @@ mod tests {
             assert!(i < cands.len());
             assert!(!c.display.is_empty());
         }
+    }
+
+    #[test]
+    fn completes_pkill_process_names() {
+        let db = CompletionDb::new();
+        // Test pkill command completions with empty query
+        let (pos, candidates) = get_completions("pkill ", 6, &db, &HashMap::new(), &HashMap::new(), &HashMap::new());
+        assert_eq!(pos, 6);
+        assert!(!candidates.is_empty(), "expected some process names for empty pkill query");
+
+        // Test kill command completions with empty query
+        let (pos_kill, candidates_kill) = get_completions("kill ", 5, &db, &HashMap::new(), &HashMap::new(), &HashMap::new());
+        assert_eq!(pos_kill, 5);
+        assert!(!candidates_kill.is_empty(), "expected some process pids for empty kill query");
     }
 }

@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 
 use rustyline::error::ReadlineError;
 use rustyline::history::DefaultHistory;
-use rustyline::{Cmd, ConditionalEventHandler, Config, EditMode, Editor, Event, EventContext, EventHandler, KeyCode, KeyEvent, Modifiers, RepeatCount, Movement};
+use rustyline::{Cmd, ConditionalEventHandler, Config, EditMode, Editor, Event, EventContext, EventHandler, KeyCode, KeyEvent, Modifiers, RepeatCount, Movement, Word, At};
 
 use crate::builtin::run_jeofetch;
 use crate::completion::JshHelper;
@@ -266,6 +266,7 @@ fn sync_pwd() {
 thread_local! {
     static KILL_RING: RefCell<VecDeque<String>> = RefCell::new(VecDeque::new());
     static KILL_RING_POS: RefCell<usize> = RefCell::new(0);
+    static EDITOR_PTR: RefCell<Option<*mut Editor<JshHelper, DefaultHistory>>> = RefCell::new(None);
 }
 
 fn kill_ring_push(text: &str) {
@@ -289,7 +290,7 @@ impl ConditionalEventHandler for KillLineHandler {
         if pos < line.len() {
             let killed = &line[pos..];
             kill_ring_push(killed);
-            Some(Cmd::Replace(Movement::WholeBuffer, Some(line[..pos].to_string())))
+            Some(Cmd::Kill(Movement::EndOfLine))
         } else {
             None
         }
@@ -310,8 +311,8 @@ impl ConditionalEventHandler for KillWordBackHandler {
             if word_start < pos {
                 let killed = &line[word_start..pos];
                 kill_ring_push(killed);
-                let new_line = format!("{}{}", &line[..word_start], &line[pos..]);
-                Some(Cmd::Replace(Movement::WholeBuffer, Some(new_line)))
+                let count = pos - word_start;
+                Some(Cmd::Kill(Movement::BackwardChar(count)))
             } else {
                 None
             }
@@ -330,7 +331,14 @@ impl ConditionalEventHandler for YankHandler {
                 let line = ctx.line();
                 let pos = ctx.pos();
                 let new_line = format!("{}{}{}", &line[..pos], entry, &line[pos..]);
-                Some(Cmd::Replace(Movement::WholeBuffer, Some(new_line)))
+                EDITOR_PTR.with(|cell| {
+                    if let Some(ptr) = *cell.borrow() {
+                        let rl = unsafe { &mut *ptr };
+                        let _ = rl.clear_history();
+                        let _ = rl.add_history_entry(&new_line);
+                    }
+                });
+                Some(Cmd::PreviousHistory)
             } else {
                 None
             }
@@ -350,7 +358,14 @@ impl ConditionalEventHandler for YankRingHandler {
                 let mut pos = pos_cell.borrow_mut();
                 *pos = (*pos + 1) % ring.len();
                 if let Some(entry) = ring.get(*pos) {
-                    Some(Cmd::Replace(Movement::WholeBuffer, Some(entry.clone())))
+                    EDITOR_PTR.with(|cell| {
+                        if let Some(ptr) = *cell.borrow() {
+                            let rl = unsafe { &mut *ptr };
+                            let _ = rl.clear_history();
+                            let _ = rl.add_history_entry(entry);
+                        }
+                    });
+                    Some(Cmd::PreviousHistory)
                 } else {
                     None
                 }
@@ -425,99 +440,28 @@ fn run_interactive(mut state: ShellState) {
         }
     }
 
-    struct NavigationState {
-        original_input: String,
-        entries: Vec<String>,
-        current_index: usize,
-    }
-
-    thread_local! {
-        static NAVIGATION: std::cell::RefCell<Option<NavigationState>> = std::cell::RefCell::new(None);
-    }
-
-    struct UpArrowHandler {
-        history_mgr: Arc<crate::shell::history::HistoryManager>,
-        shell_vars: Arc<Mutex<HashMap<String, String>>>,
-    }
-    impl ConditionalEventHandler for UpArrowHandler {
-        fn handle(&self, _evt: &Event, _n: RepeatCount, _positive: bool, ctx: &EventContext) -> Option<Cmd> {
-            let line = ctx.line();
-            let cwd = {
-                let vars = self.shell_vars.lock().unwrap();
-                vars.get("PWD").cloned().unwrap_or_else(|| ".".to_string())
-            };
-            NAVIGATION.with(|cell| {
-                let mut state_opt = cell.borrow_mut();
-                let is_continuing = state_opt.as_ref()
-                    .is_some_and(|s| s.current_index < s.entries.len() && s.entries[s.current_index] == line);
-
-                if is_continuing {
-                    let state = state_opt.as_mut().unwrap();
-                    if state.current_index + 1 < state.entries.len() {
-                        state.current_index += 1;
-                        let next_cmd = state.entries[state.current_index].clone();
-                        Some(Cmd::Replace(Movement::WholeBuffer, Some(next_cmd)))
-                    } else {
-                        None
-                    }
-                } else {
-                    let entries = self.history_mgr.get_navigation_entries(line, &cwd);
-                    if entries.is_empty() {
-                        return None;
-                    }
-                    *state_opt = Some(NavigationState {
-                        original_input: line.to_string(),
-                        entries: entries.clone(),
-                        current_index: 0,
-                    });
-                    Some(Cmd::Replace(Movement::WholeBuffer, Some(entries[0].clone())))
-                }
-            })
-        }
-    }
-
-    struct DownArrowHandler;
-    impl ConditionalEventHandler for DownArrowHandler {
-        fn handle(&self, _evt: &Event, _n: RepeatCount, _positive: bool, ctx: &EventContext) -> Option<Cmd> {
-            let line = ctx.line();
-            NAVIGATION.with(|cell| {
-                let mut state_opt = cell.borrow_mut();
-                let is_continuing = state_opt.as_ref()
-                    .is_some_and(|s| s.current_index < s.entries.len() && s.entries[s.current_index] == line);
-
-                if is_continuing {
-                    let state = state_opt.as_mut().unwrap();
-                    if state.current_index > 0 {
-                        state.current_index -= 1;
-                        let next_cmd = state.entries[state.current_index].clone();
-                        Some(Cmd::Replace(Movement::WholeBuffer, Some(next_cmd)))
-                    } else {
-                        let original = state.original_input.clone();
-                        *state_opt = None;
-                        Some(Cmd::Replace(Movement::WholeBuffer, Some(original)))
-                    }
-                } else {
-                    *state_opt = None;
-                    None
-                }
-            })
-        }
-    }
-
+    // Handlers removed
     struct CtrlRHandler {
         history_mgr: Arc<crate::shell::history::HistoryManager>,
         shell_vars: Arc<Mutex<HashMap<String, String>>>,
     }
     impl ConditionalEventHandler for CtrlRHandler {
-        fn handle(&self, _evt: &Event, _n: RepeatCount, _positive: bool, ctx: &EventContext) -> Option<Cmd> {
+        fn handle(&self, _evt: &Event, _n: RepeatCount, _positive: bool, _ctx: &EventContext) -> Option<Cmd> {
             let cwd = {
                 let vars = self.shell_vars.lock().unwrap();
                 vars.get("PWD").cloned().unwrap_or_else(|| ".".to_string())
             };
             if let Ok(Some(selected)) = crate::shell::history::interactive_reverse_search(&self.history_mgr, &cwd) {
-                Some(Cmd::Replace(Movement::WholeBuffer, Some(selected)))
+                EDITOR_PTR.with(|cell| {
+                    if let Some(ptr) = *cell.borrow() {
+                        let rl = unsafe { &mut *ptr };
+                        let _ = rl.clear_history();
+                        let _ = rl.add_history_entry(&selected);
+                    }
+                });
+                Some(Cmd::PreviousHistory)
             } else {
-                Some(Cmd::Replace(Movement::WholeBuffer, Some(ctx.line().to_string())))
+                Some(Cmd::Repaint)
             }
         }
     }
@@ -530,27 +474,18 @@ fn run_interactive(mut state: ShellState) {
         };
     }
 
-    let up_handler: Box<dyn ConditionalEventHandler> = match kb.up.as_deref() {
-        Some("history-prev") | None => Box::new(UpArrowHandler {
-            history_mgr: state.history_mgr.clone(),
-            shell_vars: state.shell_vars.clone(),
-        }),
-        Some("reverse-search") => Box::new(CtrlRHandler {
-            history_mgr: state.history_mgr.clone(),
-            shell_vars: state.shell_vars.clone(),
-        }),
-        _ => Box::new(UpArrowHandler {
-            history_mgr: state.history_mgr.clone(),
-            shell_vars: state.shell_vars.clone(),
-        }),
+    let up_handler = match kb.up.as_deref() {
+        Some("history-prev") | None => Cmd::HistorySearchBackward,
+        Some("reverse-search") => Cmd::HistorySearchBackward,
+        _ => Cmd::HistorySearchBackward,
     };
-    bind_key!(KeyCode::Up, Modifiers::empty(), EventHandler::Conditional(up_handler));
+    bind_key!(KeyCode::Up, Modifiers::empty(), up_handler);
 
-    let down_handler: Box<dyn ConditionalEventHandler> = match kb.down.as_deref() {
-        Some("history-next") | None => Box::new(DownArrowHandler),
-        _ => Box::new(DownArrowHandler),
+    let down_handler = match kb.down.as_deref() {
+        Some("history-next") | None => Cmd::HistorySearchForward,
+        _ => Cmd::HistorySearchForward,
     };
-    bind_key!(KeyCode::Down, Modifiers::empty(), EventHandler::Conditional(down_handler));
+    bind_key!(KeyCode::Down, Modifiers::empty(), down_handler);
 
     let ctrl_r_handler: Box<dyn ConditionalEventHandler> = match kb.ctrl_r.as_deref() {
         Some("reverse-search") | None => Box::new(CtrlRHandler {
@@ -572,6 +507,16 @@ fn run_interactive(mut state: ShellState) {
     bind_key!(KeyCode::Char('w'), Modifiers::CTRL, EventHandler::Conditional(Box::new(KillWordBackHandler)));
     bind_key!(KeyCode::Char('y'), Modifiers::CTRL, EventHandler::Conditional(Box::new(YankHandler)));
     bind_key!(KeyCode::Char('y'), Modifiers::ALT, EventHandler::Conditional(Box::new(YankRingHandler)));
+
+    // Fast cursor movement (Ctrl/Alt + Left/Right arrows)
+    bind_key!(KeyCode::Left, Modifiers::CTRL, Cmd::Move(Movement::BackwardWord(1, Word::Emacs)));
+    bind_key!(KeyCode::Right, Modifiers::CTRL, Cmd::Move(Movement::ForwardWord(1, At::Start, Word::Emacs)));
+    bind_key!(KeyCode::Left, Modifiers::ALT, Cmd::Move(Movement::BackwardWord(1, Word::Emacs)));
+    bind_key!(KeyCode::Right, Modifiers::ALT, Cmd::Move(Movement::ForwardWord(1, At::Start, Word::Emacs)));
+
+    // Fast deletion (Alt + Backspace / Delete)
+    bind_key!(KeyCode::Backspace, Modifiers::ALT, Cmd::Kill(Movement::BackwardWord(1, Word::Emacs)));
+    bind_key!(KeyCode::Delete, Modifiers::ALT, Cmd::Kill(Movement::ForwardWord(1, At::Start, Word::Emacs)));
 
     let helper = JshHelper {
         history_mgr: state.history_mgr.clone(),
@@ -600,8 +545,8 @@ fn run_interactive(mut state: ShellState) {
             *cell.borrow_mut() = rprompt;
         });
 
-        NAVIGATION.with(|cell| {
-            *cell.borrow_mut() = None;
+        EDITOR_PTR.with(|cell| {
+            *cell.borrow_mut() = Some(&mut rl as *mut Editor<JshHelper, DefaultHistory>);
         });
 
         crate::utils::set_cursor_bar();
@@ -610,7 +555,20 @@ fn run_interactive(mut state: ShellState) {
             let _ = std::io::stdout().write_all(b"\x1b[?2004h");
             let _ = std::io::stdout().flush();
         }
+        let cwd = {
+            let vars = state.shell_vars.lock().unwrap();
+            vars.get("PWD").cloned().unwrap_or_else(|| ".".to_string())
+        };
+        let nav_entries = state.history_mgr.get_navigation_entries("", &cwd);
+        let _ = rl.clear_history();
+        for entry in nav_entries.iter().rev() {
+            let _ = rl.add_history_entry(entry.as_str());
+        }
+
         let readline = rl.readline(&prompt_clean);
+        EDITOR_PTR.with(|cell| {
+            *cell.borrow_mut() = None;
+        });
         match readline {
             Ok(line) => {
                 let line = line.trim();
